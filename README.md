@@ -1,62 +1,94 @@
-# Codesight
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="brand/svg/codesight-readme-header-on-dark.svg">
+    <img src="brand/svg/codesight-readme-header-on-light.svg" alt="Codesight: insight into your C# code" width="440">
+  </picture>
+</p>
 
-Insight into your C# code, inside Visual Studio: what runs when a button is pressed, how the classes fit together, and where the problems are. It follows the Grapht design system, like Overlay and Grapht.
+Codesight is a Visual Studio extension that shows you how your C# code works. Press a button in your app and see what runs, in order, through which classes. See how the classes fit together. Find the parts worth a look: complex methods, code nothing uses, exceptions nothing catches, and everything a change would reach.
 
-Five views, switched in the top bar:
+It sits in a window beside your code, follows the Visual Studio theme, and takes you to the line behind anything you click.
 
-- **Flow:** what happens when something starts, in the order it runs. Pick a starting point (buttons and other events, labelled from your XAML or `+=` subscriptions, commands, web API actions, `Main`, or any method) and Codesight follows the code: every call into your own code, opened up into what that method does, with the `if`/`switch` decisions, loops, `try`/`catch`, early returns and throws around them. Calls through an interface or a virtual method show each implementation they can land in. Draw it as a **sequence** diagram (a column per class, calls going down the page) or as numbered **steps** (a flowchart). Double-click a call to open or close it; **Go to call** and **Go to method** jump to the code.
-  - **Data:** every call shows what goes in and where its result goes (`ReadAllRows(inputPath) → raw: List<string[]>`); the dashed return arrows carry the returned type. **What it produces** opens up the flow's result types into their fields, nested types and enum values. **Follow** any value (a result, an argument, an input) to see every step that makes it, works on it, takes it, checks it, returns it or throws it, across method boundaries.
+![The Flow view: what runs when the Place order button is pressed, as numbered steps](docs/flow-steps.png)
 
-- **Classes:** a UML class diagram of the solution's C# (read with Roslyn). Show a namespace, a type and everything it inherits, implements, derives or uses, or the types in a file or folder picked on the map. Boxes list members with their visibility (`+ − # ~`); hollow arrows are inheritance, dashed ones are interfaces, thin ones are fields and properties of another type. Double-click a type for its relations, double-click a member to open it in the editor.
-- **Calls:** one method in the middle, its callers on the left and the methods it calls on the right, 1 to 3 steps out, with the number of call sites. Double-click a method to move the graph to it; **Go to code** opens it at its line.
-- **Map:** a nested treemap. Area is lines, files or size; colour is the language. Double-click a folder to zoom in, double-click a file to open it. Backspace goes up a level.
-- **Tree:** a node-link diagram of folders and files. Drag to pan, scroll to zoom, click a folder to open or close it.
-- **Files panel:** browse and search. **Details panel:** language breakdown and the largest files for any selection.
-- The C# model is read again a few seconds after you stop typing. Code the build generates (`obj`, `*.g.cs`) is left out.
-- Updates by itself when files change. Skips `bin`, `obj`, `node_modules`, `target`, `.git` and the patterns in the root `.gitignore`.
+## Install
 
-**Finding problems**
-- **Hotspots:** colour the Map and Tree by complexity (Language | Complexity), see complexity badges on methods in class boxes, and the most complex methods of any file, folder or the whole solution in Details.
-- **Unused code:** members and types with no use found in the C# are marked in class boxes (dashed outline, "unused") and listed in Details. Overrides, interface implementations, entry points and XAML-created classes are never flagged.
-- **Exception map:** the **Exceptions** button in the Flow view shows every throw, the catch that stops it, and in red the ones nothing catches.
-- **Impact:** the **Impact** button on any method or type shows, in the Calls view, everything a change reaches, back to the buttons and other starting points it affects.
+1. Download `Codesight-<version>.vsix` from the [latest release](https://github.com/gowthamjeyabalan/Codesight/releases/latest).
+2. Close Visual Studio and double-click the file. The installer asks which Visual Studio to add it to (2022 or 2026). The file is not digitally signed, so the installer says so; continue.
+3. Open a solution, then **View > Other Windows > Codesight**. You can also run `View.Codesight` in the Command Window or bind it to a shortcut.
 
-**Working with the views**
-- **Follow the editor:** Codesight selects the method or class under your caret (Settings > Follow the editor). Dock Codesight beside the code to see it follow live.
-- **Export:** save the whole diagram as PNG or SVG, or copy or save it as Mermaid text.
+Codesight reads the C# projects of the open solution (a `.sln`). The folder map also works with **File > Open Folder**.
 
-- Follows the Visual Studio theme, or is set to Dark or Light. The panels are see-through over the diagram (Settings: Acrylic or Clear, panel opacity).
+## What it shows
 
-Open it from **View > Other Windows > Codesight**, or run `View.Codesight` in the Command Window.
+### Flow: what happens when you press a button
+
+Pick a starting point: a button or other event (named after the control in your XAML, or from `button.Click += ...`), a command, a web API action, `Main`, or any method. Codesight follows the code from there.
+
+- Every call into your own code, numbered in the order it runs, opened up into what that method does.
+- The decisions (`if`, `switch`), loops, `try`/`catch` blocks, early returns and throws around them.
+- For a call through an interface or a virtual method, each implementation it can go to.
+- What goes into each call and where its result goes: `ReadAllRows(inputPath) → raw: List<string[]>`.
+- **What it produces:** the result types opened up into their fields, nested types and enum values.
+- **Follow** a value to see every step that makes it, works on it, passes it on, checks it, returns it or throws it.
+- **Exceptions:** every throw, the catch that stops it, and in red the ones nothing catches.
+
+Draw it as a **sequence** diagram (a column per class, calls going down the page) or as numbered **steps** (a flowchart). Double-click a call to open or close it.
+
+![The Flow view as a sequence diagram](docs/flow-sequence.png)
+
+### Classes
+
+A UML class diagram of a namespace, of a type and everything it inherits, implements or uses, or of the types in a file or folder. Members show their visibility, methods worth a look show their complexity, and code with no use found is marked.
+
+![The Classes view](docs/classes.png)
+
+### Calls and impact
+
+One method in the middle, its callers on the left and what it calls on the right. **Impact** shows everything a change to a method or type would reach, back to the buttons and other starting points it affects.
+
+![The Calls view](docs/calls.png)
+
+### Map and tree
+
+Every folder and file of the solution as a treemap or a tree, sized by lines, files or bytes, and coloured by language or by complexity. Updates by itself as files change.
+
+![The Map view coloured by complexity](docs/map.png)
+
+### Everywhere
+
+- **Follow the editor:** the open view selects the method or class your caret is in. Dock Codesight beside your code to see it follow live.
+- **Export** any diagram, whole, as PNG or SVG, or copy it as Mermaid text for Markdown and GitHub.
+- Search, a details panel for whatever you pick, and **Go to code** on everything.
+- The C# is read again a few seconds after you stop typing. Code the build generates (`obj`, `*.g.cs`) is left out.
+- Light and dark themes that follow Visual Studio, with see-through panels (Settings: Acrylic or Clear).
+
+### Limits
+
+Codesight reads your code; it does not run it. A flow shows every path that *could* run, with types rather than live values. Events, dependency injection and reflection can hide where a call really goes, and "no use found" means nothing in the C# uses it (XAML bindings or reflection still might).
 
 ## Building
 
 Visual Studio 2022 or 2026. The build tools come from NuGet, so the Visual Studio extension development workload is only needed to open the project in the IDE and press F5.
 
 ```bash
-"C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe" Codegram.sln -restore -p:Configuration=Debug
+"C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe" Codegram.sln -restore -p:Configuration=Release
 ```
 
-This builds `src/Codegram/bin/Debug/Codegram.vsix` (the folder and project keep the original name Codegram) and deploys it to the experimental instance (`devenv /rootsuffix Exp`).
+This builds `src/Codegram/bin/Release/Codegram.vsix`. With `-p:Configuration=Debug` it also deploys to the experimental instance (`devenv /rootsuffix Exp`). The folder and project keep the extension's first name, Codegram.
 
-## Layout
+The web UI runs in a plain browser with made-up sample data, so it can be worked on without Visual Studio: open `src/Codegram/web/index.html`, optionally with `?view=flow&flowStyle=steps&theme=light`.
 
 | Path | What |
 |---|---|
 | `src/Codegram/CodegramPackage.cs` | Package and the View menu command |
-| `src/Codegram/CodegramView.cs` | WebView2 host: solution events, theme, file watcher, open file |
+| `src/Codegram/CodegramView.cs` | WebView2 host: solution events, theme, file watcher, the editor caret, open file, save and copy |
 | `src/Codegram/FolderScanner.cs` | Walks the folder, counts lines, reads `.gitignore` |
-| `src/Codegram/CodeAnalyzer.cs` | Roslyn: types, members, inheritance, associations, calls and entry points |
-| `src/Codegram/FlowAnalyzer.cs` | Roslyn: the ordered flow from one method, with decisions, loops and implementations |
-| `src/Codegram/web/` | The diagram UI (plain HTML, CSS and JavaScript, no libraries) |
+| `src/Codegram/CodeAnalyzer.cs` | Roslyn: types, members, inheritance, calls, uses, complexity, entry points |
+| `src/Codegram/FlowAnalyzer.cs` | Roslyn: the ordered flow from one method, with decisions, loops, data and exceptions |
+| `src/Codegram/web/` | The diagrams (plain HTML, CSS and JavaScript, no libraries) |
+| `brand/`, `tools/brand/` | The logo and its generator (see [brand/README.md](brand/README.md)) |
 
-The web UI runs in a normal browser with made-up sample data, so it can be worked on without Visual Studio. Serve `src/Codegram/web` and open `index.html`.
+## License
 
-## Roadmap
-
-1. ~~Folder and file map~~
-2. ~~C# class diagrams and call graphs from Roslyn, with click-to-code~~
-3. Focus mode, filters, and export to SVG, PNG and Mermaid
-4. Speed on large repositories (incremental scans, cache) and a Marketplace release
-
-Later, if wanted: TypeScript/JavaScript, Python and Rust through their language servers. For now the code views are C# only.
+MIT, see [LICENSE](LICENSE).

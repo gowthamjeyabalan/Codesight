@@ -12,6 +12,9 @@
   const defaults = { theme: 'vs', material: 'acrylic', alpha: 0.8, view: 'map', metric: 'lines', colorBy: 'language', follow: true, members: 'all', depth: 2, flowStyle: 'sequence', files: true, details: true };
   let settings = { ...defaults };
   try { Object.assign(settings, JSON.parse(localStorage.getItem('codesight.settings') || '{}')); } catch { /* private or blocked storage */ }
+  // the demo page (no Visual Studio) can open on a view and style: index.html?view=flow&flowStyle=steps&theme=light
+  if (!(window.chrome && window.chrome.webview))
+    for (const [k, v] of new URLSearchParams(location.search)) if (k in settings) settings[k] = v;
   const save = () => { try { localStorage.setItem('codesight.settings', JSON.stringify(settings)); } catch { /* ignore */ } };
 
   const app = (CG.app = {

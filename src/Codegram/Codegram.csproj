@@ -71,6 +71,10 @@
       <IncludeInVSIX>true</IncludeInVSIX>
     </Content>
     <None Include="Resources\codesight-menu.png" />
+    <!-- the licence the installer shows: a copy of the repository's LICENSE (the packager only takes files inside the project) -->
+    <Content Include="LICENSE.txt">
+      <IncludeInVSIX>true</IncludeInVSIX>
+    </Content>
     <!-- The diagram UI, served to WebView2 from the extension folder. -->
     <Content Include="web\**\*">
       <IncludeInVSIX>true</IncludeInVSIX>

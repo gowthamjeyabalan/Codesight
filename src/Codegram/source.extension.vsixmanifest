@@ -4,6 +4,8 @@
     <Identity Id="Codegram.8ba49079-ed4d-474c-83c1-e967ce7c621c" Version="0.2.0" Language="en-US" Publisher="gowthamjeyabalan" />
     <DisplayName>Codesight</DisplayName>
     <Description xml:space="preserve">Insight into your C# code: see what runs when a button is pressed, class diagrams, call graphs, a live map of every file, and the problems worth a look (hotspots, unused code, uncaught exceptions, the impact of a change).</Description>
+    <MoreInfo>https://github.com/gowthamjeyabalan/Codesight</MoreInfo>
+    <License>LICENSE.txt</License>
     <Icon>Resources\codesight-icon.png</Icon>
     <PreviewImage>Resources\codesight-preview.png</PreviewImage>
     <Tags>code map; diagram; visualization; architecture; dependency graph; call graph; flow; code quality</Tags>
