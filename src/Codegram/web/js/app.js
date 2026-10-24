@@ -22,7 +22,7 @@
     code: null, codeVersion: 0, codeState: 'idle',
     csel: null, scope: null, callFocus: null, codeMatches: null,
     // flow: the starting member, its steps, the picked step
-    flowEntry: null, flow: null, fsel: null, flowVersion: 0, flowLoads: 0, flowStyle: settings.flowStyle,
+    flowEntry: null, flow: null, fsel: null, flowVersion: 0, flowLoads: 0, flowStyle: settings.flowStyle, trace: null,
     // shared
     hover: null, metric: settings.metric, view: settings.view, membersMode: settings.members, depth: +settings.depth,
     region: { x: 0, y: 0, w: 0, h: 0 }, t: null, emptyMsg: null,
@@ -278,6 +278,7 @@
     app.flowEntry = x;
     app.flow = { state: 'loading', id: x.id };
     app.fsel = null;
+    app.trace = null;
     app.flowVersion++;
     if (host) send({ type: 'flow', id: x.id });
     else setTimeout(() => onHost({ type: 'flowResult', id: x.id, flow: CG.sampleFlow(app.code, x), budget: 2500 }), 120);
@@ -291,6 +292,7 @@
     app.flowVersion++;
     app.flowLoads++;
     app.fsel = null;
+    app.trace = null;
     renderAll();
   }
 
@@ -688,18 +690,49 @@
   };
 
   function renderFlowDetails() {
-    const title = $('d-title'), body = $('d-body'), f = app.flow, e = app.flowEntry, s = app.fsel;
+    const title = $('d-title'), body = $('d-body'), f = app.flow, e = app.flowEntry, s = app.fsel, c = app.code;
     if (!e) { title.textContent = 'Details'; body.innerHTML = ''; return; }
+    const follow = (name, scope, label) =>
+      `<button class="chip" data-follow="${CG.esc(name)}" data-scope="${scope}" title="Show where ${CG.esc(name)} goes">${CG.esc(label || 'Follow')}</button>`;
     let h = '';
+
+    // a followed value: every step it passes through, in order
+    const tr = app.trace;
+    if (tr) {
+      h += `<div class="trace"><div class="heading">Following ${CG.esc(tr.name)}</div>`;
+      tr.list.forEach((x, i) => {
+        const no = x.step.k === 'call' ? x.step.no : '·';
+        h += `<div class="top" data-ti="${i}" title="${CG.esc(x.step.f || '')}:${(x.step.l || 0) + 1}"><span class="step-no">${no}</span>` +
+          `<span class="name">${CG.esc(CG.flowLabel(x.step))}</span><span class="num">${CG.esc(x.role)}</span></div>`;
+      });
+      if (!tr.list.length) h += '<div class="hint">It is not used again in this flow.</div>';
+      h += '<div class="btn-row"><button class="btn" data-act="stop-trace">Stop following</button></div></div>';
+    }
+
     if (!s || s === (f && f.data && f.data.root)) {
       title.innerHTML = `<span class="title">${CG.esc(e.ui || e.label)}</span>`;
       h += `<div class="path">${CG.esc(e.ui ? e.label : e.type.full)}</div><div class="sig">${CG.esc(`${e.a} ${e.n}${e.s}`)}</div>`;
       if (f && f.state === 'ready')
         h += `<div class="stats"><span class="k">Calls</span><span class="v">${f.data.calls}</span><span class="k">Classes</span><span class="v">${f.data.classes}</span></div>`;
       h += '<div class="btn-row"><button class="btn" data-act="goto-entry">Go to code</button><button class="btn" data-act="open-all">Open all</button><button class="btn" data-act="close-all">Close all</button></div>';
-      h += '<div class="heading">Reading the flow</div><div class="hint">Calls are numbered in the order they run. Double-click a call to open or close what it does; boxes marked alt, opt, loop and try are decisions, optional parts, loops and error handling.</div>';
+      if (e.pn && e.pn.length && e.ep !== 'event' && f && f.state === 'ready') {
+        h += '<div class="heading">Goes in</div>';
+        for (const p of e.pn) h += `<div class="io"><span class="name">${CG.esc(p)}</span>${follow(p, 1)}</div>`;
+      }
+      if (f && f.state === 'ready') {
+        const outs = CG.flowOutputs(f.data, c);
+        if (outs.length) {
+          h += '<div class="heading">What it produces</div>';
+          for (const o of outs) {
+            const by = o.from === f.data.root ? 'returned' : `from ${o.from.no}. ${CG.flowLabel(o.from)}`;
+            const into = o.from.v && o.from.v !== 'return' ? follow(o.from.v, CG.enclosing(o.from) ? CG.enclosing(o.from).no : 1, `Follow ${o.from.v}`) : '';
+            h += `<div class="io"><span class="hint">${CG.esc(by)}</span>${into}</div><div class="shape">${CG.shapeHtml(c, o.type.n)}</div>`;
+          }
+        }
+      }
+      if (!tr) h += '<div class="heading">Reading the flow</div><div class="hint">Calls are numbered in the order they run; each shows what goes in and, after the arrow, where its result goes. Double-click a call to open or close it. Follow a value to see every step it passes through.</div>';
     } else if (s.k === 'call') {
-      const m = s.member;
+      const m = s.member, scope = CG.enclosing(s);
       title.innerHTML = `<span class="title">${s.no}. ${CG.esc(CG.flowLabel(s))}</span>`;
       h += `<div class="path">${CG.esc(m ? m.type.full : 'outside the solution')}</div>`;
       if (m) h += `<div class="sig">${CG.esc(`${s.aw ? 'await ' : ''}${m.a}${m.st ? ' static' : ''} ${m.n}${m.s}`)}</div>`;
@@ -713,6 +746,31 @@
       if (CG.canOpen(s)) buttons.push(`<button class="btn" data-act="toggle">${s.open ? 'Close' : 'Open'}</button>`);
       if (m && CG.isMethod(m) && s.parent) buttons.push('<button class="btn" data-act="start-here">Start here</button>');
       h += `<div class="btn-row">${buttons.join('')}</div>`;
+
+      // what goes in: the object it runs on, each argument, and the parameter it becomes inside the method
+      if ((s.a && s.a.length) || s.on) h += '<div class="heading">Goes in</div>';
+      if (s.on) {
+        const target = CG.followable(s.on);
+        h += `<div class="io"><span class="name" title="${CG.esc(s.on)}">${CG.esc(s.on)}</span><span class="hint">runs on it</span>${target && scope ? follow(target, scope.no) : ''}</div>`;
+      }
+      if (s.a && s.a.length) {
+        s.a.forEach((arg, i) => {
+          const p = m && m.pn && m.pn[i];
+          const name = CG.followable(arg);
+          h += `<div class="io"><span class="name" title="${CG.esc(arg)}">${CG.esc(arg)}</span>${p ? `<span class="hint">as ${CG.esc(p)}</span>` : ''}${name && scope ? follow(name, scope.no) : ''}</div>`;
+        });
+      }
+      // what comes out: the type, where it is stored, what the method returns, and the type's shape
+      const type = CG.stepType(s);
+      if (type || s.v || s.rv) {
+        h += '<div class="heading">Comes out</div>';
+        if (type) h += `<div class="io"><span class="name">${CG.esc(type)}</span></div>`;
+        if (s.rv) h += `<div class="io"><span class="hint">returns ${CG.esc(s.rv.join(' or '))}</span></div>`;
+        if (s.v === 'return') h += '<div class="io"><span class="hint">and is returned straight away</span></div>';
+        else if (s.v) h += `<div class="io"><span class="hint">stored in</span><span class="name">${CG.esc(s.v)}</span>${scope ? follow(s.v, scope.no) : ''}</div>`;
+        const shape = type ? CG.shapeHtml(c, type) : '';
+        if (shape) h += `<div class="shape">${shape}</div>`;
+      }
     } else {
       const names = { if: 'Decision', switch: 'Decision', loop: 'Loop', try: 'Error handling', return: 'Returns early', throw: 'Throws' };
       title.innerHTML = `<span class="title">${names[s.k]}</span>`;
@@ -722,6 +780,33 @@
       h += '<div class="btn-row"><button class="btn" data-act="goto-step">Go to code</button></div>';
     }
     body.innerHTML = h;
+  }
+
+  /** Shows every step a value passes through, opening the calls on the way so they can be seen. */
+  function startTrace(scope, name) {
+    const f = app.flow;
+    if (!f || f.state !== 'ready' || !scope) return;
+    const roles = CG.traceValue(scope, name);
+    for (const step of roles.keys())
+      for (let p = step.parent; p; p = p.parent) if (CG.canOpen(p)) p.open = true;
+    const list = [];
+    const visit = (st) => {
+      if (roles.has(st)) list.push({ step: st, role: roles.get(st) });
+      (st.s || []).forEach(visit);
+      (st.b || []).forEach((b) => b.s.forEach(visit));
+    };
+    visit(f.data.root);
+    app.trace = { name, roles, list };
+    app.flowVersion++;
+    renderDetails();
+    redraw();
+  }
+
+  function stopTrace() {
+    app.trace = null;
+    app.flowVersion++;
+    renderDetails();
+    redraw();
   }
 
   function renderCodeDetails() {
@@ -796,6 +881,7 @@
       const a = act.dataset.act;
       if (app.view === 'flow') {
         const s = app.fsel;
+        if (a === 'stop-trace') stopTrace();
         if (a === 'goto-entry') goto(app.flowEntry);
         if (a === 'open-all') setAllOpen(true);
         if (a === 'close-all') setAllOpen(false);
@@ -822,12 +908,19 @@
       }
       return;
     }
+    const chip = e.target.closest('[data-follow]');
+    if (chip && app.flow && app.flow.data) return startTrace(app.flow.data.byNo.get(+chip.dataset.scope), chip.dataset.follow);
+    const traced = e.target.closest('[data-ti]');
+    if (traced && app.trace) return selectStep(app.trace.list[+traced.dataset.ti].step, 'details');
     const top = e.target.closest('.top[data-id]');
     if (!top) return;
     if (top.dataset.k) selectCode(codeOf(top), 'details');
     else select(app.model.nodes[+top.dataset.id], 'details');
   });
   $('d-body').addEventListener('dblclick', (e) => {
+    // a field or type in a result's shape opens its declaration
+    const part = e.target.closest('.shape [data-k]');
+    if (part && app.code) return goto(app.code.byId.get(+part.dataset.id));
     const top = e.target.closest('.top[data-id]');
     if (!top) return;
     if (!top.dataset.k) return openFile(app.model.nodes[+top.dataset.id]);
@@ -1031,6 +1124,7 @@
     } else if (e.key === 'Escape') {
       if (!pop.hidden) pop.hidden = true;
       else if ($('search').value) { $('search').value = ''; search(); codeSearch(); renderList(); redraw(); }
+      else if (app.view === 'flow' && app.trace) stopTrace();
       else if (app.view === 'flow' && app.fsel) selectStep(null, 'key');
       else if (isCode() && app.csel) selectCode(null, 'key');
       else if (!isCode() && app.selected) select(null, 'key');

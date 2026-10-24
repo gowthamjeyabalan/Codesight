@@ -13,6 +13,11 @@ CG.sampleCode = function () {
       const [, mark, kind, name, sig] = spec.match(/^([+\-#~]) (\w+) (\w+)(.*)$/);
       const x = { id: id++, n: kind === 'ctor' ? short : name, k: kind, s: sig.trim(), a: access[mark], l: line };
       if (x.s.includes('static ')) { x.st = true; x.s = x.s.replace('static ', ''); }
+      // what it gives back and its parameter names, as CodeAnalyzer.cs sends them
+      const ret = /\)?: (.+)$/.exec(x.s);
+      if (ret && kind !== 'ctor' && ret[1] !== 'void') x.r = ret[1];
+      const params = /^\((.*)\)/.exec(x.s);
+      if (params && params[1]) x.pn = params[1].split(', ').map((p) => p.split(' ').pop());
       line += kind === 'method' || kind === 'ctor' ? 9 : 1;
       t.m.push(x);
       members.set(`${short}.${name}`, x);

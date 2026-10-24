@@ -125,6 +125,21 @@ body.acrylic .glass { backdrop-filter: blur(24px) saturate(1.5); }
 .row.sel .num { color: rgba(255, 255, 255, 0.85); }
 .row.more { color: var(--text-secondary); font-size: 12px; padding-left: 24px; }
 .row.more:hover { background: none; }
+.io { display: flex; align-items: center; gap: 7px; min-height: 24px; }
+.io .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.io .hint { white-space: nowrap; }
+.io .chip { margin-left: auto; }
+.chip { flex: none; height: 20px; padding: 0 9px; border: 0; border-radius: 10px; background: var(--bg-control); color: var(--accent-text); font: 500 11.5px var(--font-sans); white-space: nowrap; }
+.chip:hover { background: var(--bg-control-hover); }
+.shape { background: var(--well); border-radius: var(--radius-card); padding: 7px 10px; margin: 4px 0 8px; font-size: 12px; user-select: text; }
+.shape-type { display: flex; align-items: center; gap: 7px; height: 22px; font-weight: 600; }
+.shape-type .hint { font-weight: 400; }
+.shape-kids { margin-left: 3px; padding-left: 11px; border-left: 1px solid var(--hairline); }
+.shape-row { display: flex; gap: 2px; height: 20px; align-items: center; white-space: nowrap; overflow: hidden; }
+.shape-row .hint { overflow: hidden; text-overflow: ellipsis; }
+.trace { background: color-mix(in srgb, var(--accent) 12%, transparent); border-radius: var(--radius-card); padding: 0 10px 10px; margin: 8px 0 4px; }
+.trace .heading { color: var(--accent-text); padding-top: 10px; margin-top: 0; }
+.step-no { flex: none; min-width: 20px; height: 18px; border-radius: 9px; background: var(--accent); color: #fff; font-size: 11px; font-weight: 600; text-align: center; line-height: 18px; padding: 0 5px; }
 .list .group { font-size: 11.5px; font-weight: 600; color: var(--text-secondary); padding: 12px 6px 4px; }
 .list .group:first-child { padding-top: 4px; }
 

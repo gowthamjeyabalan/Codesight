@@ -30,6 +30,14 @@ namespace Codegram
         [JsonProperty("b", NullValueHandling = NullValueHandling.Ignore)] public List<FlowBranch> Branches;
         /// <summary>Why a call was not followed: seen (shown earlier), recursion, depth or budget.</summary>
         [JsonProperty("x", NullValueHandling = NullValueHandling.Ignore)] public string Stop;
+        /// <summary>The object a method is called on ("raw" in raw.Count()), unless it is this, base or a type.</summary>
+        [JsonProperty("on", NullValueHandling = NullValueHandling.Ignore)] public string On;
+        /// <summary>The arguments of a call, as written.</summary>
+        [JsonProperty("a", NullValueHandling = NullValueHandling.Ignore)] public List<string> Args;
+        /// <summary>Where a call's result goes: the variable or field it is stored in, or "return" when it is returned.</summary>
+        [JsonProperty("v", NullValueHandling = NullValueHandling.Ignore)] public string Into;
+        /// <summary>What the called method returns, as written in its return statements.</summary>
+        [JsonProperty("rv", NullValueHandling = NullValueHandling.Ignore)] public List<string> Returned;
     }
 
     sealed class FlowBranch
@@ -98,7 +106,9 @@ namespace Codegram
             };
             c.Expanded.Add(method);
             c.Active.Add(method);
-            start.Steps = await BodyAsync(c, method).ConfigureAwait(false);
+            var returned = new List<string>();
+            start.Steps = await BodyAsync(c, method, returned).ConfigureAwait(false);
+            start.Returned = returned.Count > 0 ? returned : null;
             return start;
         }
 
@@ -113,7 +123,7 @@ namespace Codegram
         }
 
         /// <summary>The steps of a method's body (block or expression), or null when it has no source body.</summary>
-        static async Task<List<FlowStep>> BodyAsync(Context c, IMethodSymbol method)
+        static async Task<List<FlowStep>> BodyAsync(Context c, IMethodSymbol method, List<string> returned)
         {
             foreach (var reference in method.DeclaringSyntaxReferences)
             {
@@ -124,7 +134,7 @@ namespace Codegram
                 if (model == null)
                     continue;
                 var steps = new List<FlowStep>();
-                var w = new Walker(c, model);
+                var w = new Walker(c, model, returned);
                 switch (node)
                 {
                     case ConstructorDeclarationSyntax ctor:
@@ -151,11 +161,20 @@ namespace Codegram
         {
             readonly Context c;
             readonly SemanticModel model;
+            /// <summary>The expressions this body returns, collected for the call that runs it.</summary>
+            readonly List<string> returned;
 
-            public Walker(Context c, SemanticModel model)
+            public Walker(Context c, SemanticModel model, List<string> returned)
             {
                 this.c = c;
                 this.model = model;
+                this.returned = returned;
+            }
+
+            void Returns(string text)
+            {
+                if (!string.IsNullOrEmpty(text) && !returned.Contains(text) && returned.Count < 6)
+                    returned.Add(text);
             }
 
             FlowStep At(SyntaxNode node, string kind, string text = null) => new FlowStep
@@ -171,7 +190,10 @@ namespace Codegram
                 if (block != null)
                     await StatementsAsync(block.Statements, into, false).ConfigureAwait(false);
                 else if (expression != null)
+                {
                     await ExprAsync(expression, into).ConfigureAwait(false);
+                    Returns(Short(expression));
+                }
             }
 
             async Task StatementsAsync(IEnumerable<StatementSyntax> statements, List<FlowStep> into, bool inBranch)
@@ -310,6 +332,8 @@ namespace Codegram
 
                     case ReturnStatementSyntax r:
                         await ExprAsync(r.Expression, into).ConfigureAwait(false);
+                        if (r.Expression != null)
+                            Returns(Short(r.Expression));
                         // the return at the end of a method is where it ends anyway; early ones change the flow
                         if (inBranch)
                             into.Add(At(r, "return", r.Expression != null ? Short(r.Expression) : ""));
@@ -466,6 +490,12 @@ namespace Codegram
                 }
 
                 var step = At(node, "call");
+                step.Args = ArgsOf(node);
+                step.Into = Target(node);
+                if (node is InvocationExpressionSyntax call && call.Expression is MemberAccessExpressionSyntax access
+                    && !(access.Expression is ThisExpressionSyntax) && !(access.Expression is BaseExpressionSyntax)
+                    && !(model.GetSymbolInfo(access.Expression, c.Ct).Symbol is ITypeSymbol))
+                    step.On = Short(access.Expression);
                 step.Member = id;
                 into.Add(step);
                 if (++c.Count > Budget)
@@ -486,7 +516,9 @@ namespace Codegram
                         {
                             var implId = c.Ids.TryGetValue(impl.GetDocumentationCommentId() ?? "", out var iid) ? iid : (int?)null;
                             var branch = new FlowBranch { Label = impl.ContainingType.Name, Member = implId };
-                            var (steps, stop) = await FollowAsync(impl).ConfigureAwait(false);
+                            var (steps, stop, gives) = await FollowAsync(impl).ConfigureAwait(false);
+                            if (gives != null && impls.Count == 1)
+                                step.Returned = gives;
                             if (steps != null)
                                 branch.Steps = steps;
                             step.Branches.Add(branch);
@@ -499,26 +531,60 @@ namespace Codegram
                     }
                 }
 
-                var (body, why) = await FollowAsync(target).ConfigureAwait(false);
+                var (body, why, returns) = await FollowAsync(target).ConfigureAwait(false);
                 step.Stop = why;
+                step.Returned = returns;
                 if (callbacks.Count > 0)
                     body = (body ?? new List<FlowStep>()).Concat(callbacks).ToList();
                 step.Steps = body != null && body.Count > 0 ? body : null;
             }
 
             /// <summary>The body of a called method, unless it is already on the way here, was shown before, or is too deep.</summary>
-            async Task<(List<FlowStep> steps, string stop)> FollowAsync(IMethodSymbol method)
+            async Task<(List<FlowStep> steps, string stop, List<string> returns)> FollowAsync(IMethodSymbol method)
             {
                 if (c.Active.Contains(method))
-                    return (null, "recursion");
+                    return (null, "recursion", null);
                 if (c.Expanded.Contains(method))
-                    return (null, "seen");
+                    return (null, "seen", null);
                 if (c.Active.Count >= MaxDepth)
-                    return (null, "depth");
+                    return (null, "depth", null);
                 c.Expanded.Add(method);
                 c.Active.Add(method);
-                try { return (await FlowAnalyzer.BodyAsync(c, method).ConfigureAwait(false), null); }
+                var gives = new List<string>();
+                try { return (await FlowAnalyzer.BodyAsync(c, method, gives).ConfigureAwait(false), null, gives.Count > 0 ? gives : null); }
                 finally { c.Active.Remove(method); }
+            }
+
+            /// <summary>The arguments of a call as written; a lambda shows as "=>".</summary>
+            static List<string> ArgsOf(SyntaxNode node)
+            {
+                var list = node is InvocationExpressionSyntax inv ? inv.ArgumentList
+                    : node is BaseObjectCreationExpressionSyntax oc ? oc.ArgumentList
+                    : node is ConstructorInitializerSyntax ci ? ci.ArgumentList
+                    : null;
+                if (list == null || list.Arguments.Count == 0)
+                    return null;
+                return list.Arguments.Select(a => a.Expression is AnonymousFunctionExpressionSyntax ? "=>" : Short(a.Expression)).ToList();
+            }
+
+            /// <summary>Where the value of a call goes: "var raw = Read()" gives raw, "x.Rows = Read()" gives x.Rows, "return Read()" gives return.</summary>
+            static string Target(SyntaxNode node)
+            {
+                var up = node.Parent;
+                while (up is AwaitExpressionSyntax || up is ParenthesizedExpressionSyntax || up is CastExpressionSyntax || up is PostfixUnaryExpressionSyntax)
+                    up = up.Parent;
+                switch (up)
+                {
+                    case EqualsValueClauseSyntax eq when eq.Parent is VariableDeclaratorSyntax v:
+                        return v.Identifier.Text;
+                    case AssignmentExpressionSyntax a when a.Right.Span.Contains(node.Span):
+                        return Short(a.Left);
+                    case ReturnStatementSyntax _:
+                    case ArrowExpressionClauseSyntax _:
+                        return "return";
+                    default:
+                        return null;
+                }
             }
 
             /// <summary>Source implementations an interface or virtual call can land in (the method itself too, when it has a body).</summary>

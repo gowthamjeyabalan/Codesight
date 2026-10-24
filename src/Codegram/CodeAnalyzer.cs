@@ -53,6 +53,10 @@ namespace Codegram
         [JsonProperty("ep", NullValueHandling = NullValueHandling.Ignore)] public string Entry;
         /// <summary>The control or event that runs an event handler, as in "Button Convert · Click".</summary>
         [JsonProperty("ui", NullValueHandling = NullValueHandling.Ignore)] public string Ui;
+        /// <summary>What a method gives back (null for void and constructors); a property's or field's type.</summary>
+        [JsonProperty("r", NullValueHandling = NullValueHandling.Ignore)] public string Returns;
+        /// <summary>Parameter names of a method, to follow a value from an argument into the method.</summary>
+        [JsonProperty("pn", NullValueHandling = NullValueHandling.Ignore)] public List<string> Parameters;
     }
 
     sealed class CodeModel
@@ -247,6 +251,8 @@ namespace Codegram
                     File = mfile == file ? null : mfile,
                     Line = mloc.GetLineSpan().StartLinePosition.Line,
                     Entry = member is IMethodSymbol method ? EntryKind(method) : null,
+                    Returns = ValueType(member),
+                    Parameters = member is IMethodSymbol withArgs && withArgs.Parameters.Length > 0 ? withArgs.Parameters.Select(p => p.Name).ToList() : null,
                 };
                 c.MembersByKey[mkey] = m.Id;
                 c.Members[m.Id] = m;
@@ -548,6 +554,22 @@ namespace Codegram
                     return ": " + e.Type.ToDisplayString(TypeFormat);
                 default:
                     return "";
+            }
+        }
+
+        /// <summary>The type of what a member holds or gives back, or null for void methods and constructors.</summary>
+        static string ValueType(ISymbol member)
+        {
+            switch (member)
+            {
+                case IMethodSymbol m when !m.ReturnsVoid && m.MethodKind != MethodKind.Constructor && m.MethodKind != MethodKind.StaticConstructor:
+                    return m.ReturnType.ToDisplayString(TypeFormat);
+                case IPropertySymbol p:
+                    return p.Type.ToDisplayString(TypeFormat);
+                case IFieldSymbol f when f.ContainingType.TypeKind != TypeKind.Enum:
+                    return f.Type.ToDisplayString(TypeFormat);
+                default:
+                    return null;
             }
         }
 

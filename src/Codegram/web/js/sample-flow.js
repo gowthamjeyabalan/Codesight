@@ -15,8 +15,12 @@ CG.sampleFlow = function (code, entry) {
     return steps;
   };
 
+  // arguments named like the parameters, results stored in a variable named after their type
+  const lower = (t) => t.replace(/<.*/, '').replace(/^Task<?|>$/g, '').replace(/^./, (ch) => ch.toLowerCase());
   const call = (callee, caller, i, extra = {}) => {
-    const s = { k: 'call', m: callee.id, ...at(caller, i), ...extra };
+    const r = callee.k === 'ctor' ? callee.type.n : callee.r && CG.unwrapTask(callee.r);
+    const s = { k: 'call', m: callee.id, ...at(caller, i), a: callee.pn ? callee.pn.slice() : undefined, v: r ? lower(r) : undefined, ...extra };
+    if (r && callee.k !== 'ctor') s.rv = [lower(r)];
     if (callee.type.k === 'interface') {
       const impls = callee.type.implementors.map((t) => t.m.find((x) => x.n === callee.n)).filter(Boolean);
       if (impls.length) {
@@ -35,7 +39,7 @@ CG.sampleFlow = function (code, entry) {
       return [{
         k: 'try', c: 'try', ...at(m, 1),
         b: [
-          { c: 'try', s: [call(named(m, 'Place'), m, 2, { aw: true })] },
+          { c: 'try', s: [call(named(m, 'Place'), m, 2, { aw: true, on: '_service', a: ['_customer', 'CartItems()'], v: 'order' })] },
           { c: 'catch InvalidOperationException', s: [call(named(m, 'ShowError'), m, 6)] },
         ],
       }];
@@ -44,12 +48,15 @@ CG.sampleFlow = function (code, entry) {
       return [
         call(named(m, 'NotNull'), m, 1),
         { k: 'if', c: 'products.Count == 0', ...at(m, 2), b: [{ c: 'yes', s: [{ k: 'throw', c: 'new ArgumentException("An order needs products")', ...at(m, 3) }] }, { c: 'no', s: [] }] },
-        call(named(m, 'new Order'), m, 4),
-        { k: 'loop', c: 'for each product in products', ...at(m, 5), s: [call(named(m, 'Price'), m, 7), call(named(m, 'AddLine'), m, 8)] },
-        call(named(m, 'Place'), m, 10),
-        call(named(m, 'Add'), m, 11),
-        call(named(m, 'Commit'), m, 12, { aw: true }),
-        call(named(m, 'SendConfirmation'), m, 13, { aw: true }),
+        call(named(m, 'new Order'), m, 4, { v: 'order' }),
+        { k: 'loop', c: 'for each product in products', ...at(m, 5), s: [
+          call(named(m, 'Price'), m, 7, { on: 'pricing', v: 'price' }),
+          call(named(m, 'AddLine'), m, 8, { on: 'order', a: ['product', '1'] }),
+        ] },
+        call(named(m, 'Place'), m, 10, { on: 'order' }),
+        call(named(m, 'Add'), m, 11, { on: 'orders', a: ['order'] }),
+        call(named(m, 'Commit'), m, 12, { aw: true, on: 'work' }),
+        call(named(m, 'SendConfirmation'), m, 13, { aw: true, on: 'mail', a: ['order'] }),
         { k: 'return', c: 'order', ...at(m, 14) },
       ].map((s) => s);
     }

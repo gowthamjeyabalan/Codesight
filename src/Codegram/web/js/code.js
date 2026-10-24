@@ -70,7 +70,13 @@ CG.buildCode = function (m) {
     if (!byFile.has(f)) byFile.set(f, []);
     byFile.get(f).push(t);
   }
-  return { types, members, byId, namespaces, byFile, calls, methods: members.filter(CG.isMethod).length, info: m };
+  // types by their plain name, to find "ConversionResult" in a type text like "List<ConversionResult>"
+  const byShort = new Map();
+  for (const t of types) {
+    const plain = t.n.replace(/<.*/, '').split('.').pop();
+    if (!byShort.has(plain)) byShort.set(plain, t);
+  }
+  return { types, members, byId, namespaces, byFile, byShort, calls, methods: members.filter(CG.isMethod).length, info: m };
 };
 
 /** A stable name for a type, member or namespace, to find it again after the model is read again. */

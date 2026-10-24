@@ -28,7 +28,14 @@ CG.prepareFlow = function (root, code, entry) {
   };
   walk(root, null, 0);
   root.open = true;
-  return { root, entry, calls, classes: classes.size, stopped };
+  const byNo = new Map();
+  const index = (s) => {
+    if (s.k === 'call') byNo.set(s.no, s);
+    (s.s || []).forEach(index);
+    (s.b || []).forEach((b) => b.s.forEach(index));
+  };
+  index(root);
+  return { root, entry, calls, classes: classes.size, stopped, byNo };
 };
 
 CG.canOpen = (s) => s.k === 'call' && s.parent != null && ((s.s && s.s.length) || (s.b && s.b.length));
@@ -271,8 +278,11 @@ class StepsLayout {
         let w = 40 + this.width(String(s.no), '11px Inter') + this.width(p.type, '11.5px Inter') + this.width(p.name, '600 12px Inter');
         if (s.aw) w += this.width('await ', 'italic 11.5px Inter');
         if (s.x) w += this.width(STOP_TEXT[s.x], '11px Inter') + 14;
+        if (s.member) w += this.width(CG.argsText(s, 34), '11.5px Inter');
+        const out = CG.stepOut(s);
+        if (out) w += this.width('  → ' + out, '11px Inter');
         if (CG.canOpen(s)) w += 14;
-        w = Math.min(460, Math.max(130, Math.ceil(w)));
+        w = Math.min(560, Math.max(130, Math.ceil(w)));
         let body = null;
         if (s.open && (s.b || s.s)) {
           const alts = s.b && s.b.length ? this.branches(s.b, (b) => (s.b.length > 1 ? b.c : `in ${b.c}`)) : { w: 0, h: 0, place() {} };
@@ -371,10 +381,15 @@ class StepsLayout {
     }
     ctx.textAlign = 'left';
 
+    const trace = a.trace;
     for (const n of this.nodes) {
       const s = n.s, isSel = s === sel, isHov = s === hov;
-      ctx.lineWidth = isSel ? 2 : 1;
-      ctx.strokeStyle = isSel ? t.accent : t.cardStroke;
+      const role = trace && trace.roles.get(s);
+      // a followed value: its steps stand out, the rest steps back
+      ctx.globalAlpha = trace && !role && n.kind !== 'start' ? 0.3 : 1;
+      if (role) this.roleTag(ctx, t, role, n);
+      ctx.lineWidth = isSel || role ? 2 : 1;
+      ctx.strokeStyle = isSel || role ? t.accent : t.cardStroke;
       if (n.kind === 'decision') {
         hexagon(ctx, n.x, n.y, n.w, n.h);
         ctx.fillStyle = isHov ? t.cardHover : t.card;
@@ -417,10 +432,27 @@ class StepsLayout {
         ctx.fillStyle = t.text2;
         ctx.fillText(p.type, x, mid);
         x += ctx.measureText(p.type).width;
+        ctx.font = '11px Inter';
+        const end = n.x + n.w - (CG.canOpen(s) ? 22 : 10) - (s.x ? ctx.measureText(STOP_TEXT[s.x]).width + 12 : 0);
         ctx.font = p.outside ? 'italic 12px Inter' : '600 12px Inter';
         ctx.fillStyle = p.outside ? t.text2 : t.text;
-        const room = n.x + n.w - x - (CG.canOpen(s) ? 22 : 10) - (s.x ? ctx.measureText(STOP_TEXT[s.x]).width + 12 : 0);
-        ctx.fillText(CG.fit(ctx, p.name, room), x, mid);
+        const name = CG.fit(ctx, p.name, end - x);
+        ctx.fillText(name, x, mid);
+        x += ctx.measureText(name).width;
+        // what goes in, and where the result goes
+        if (s.member && name === p.name) {
+          ctx.font = '11.5px Inter';
+          ctx.fillStyle = t.text2;
+          const args = CG.fit(ctx, CG.argsText(s, 34), end - x);
+          ctx.fillText(args, x, mid);
+          x += ctx.measureText(args).width;
+          const out = CG.stepOut(s);
+          if (out && x < end - 20) {
+            ctx.font = '11px Inter';
+            ctx.fillStyle = t.accentText;
+            ctx.fillText(CG.fit(ctx, '  → ' + out, end - x), x, mid);
+          }
+        }
         if (s.x) {
           ctx.font = '11px Inter';
           ctx.fillStyle = t.text2;
@@ -441,6 +473,19 @@ class StepsLayout {
         ctx.textAlign = 'left';
       }
     }
+    ctx.globalAlpha = 1;
+  }
+
+  /** What a step does with the followed value, to the right of it. */
+  roleTag(ctx, t, role, n) {
+    ctx.font = '600 11px Inter';
+    const w = ctx.measureText(role).width + 14;
+    ctx.beginPath();
+    ctx.roundRect(n.x + n.w + 8, n.y + n.h / 2 - 9, w, 18, 9);
+    ctx.fillStyle = t.accent;
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.fillText(role, n.x + n.w + 15, n.y + n.h / 2 + 4);
   }
 }
 
@@ -561,12 +606,16 @@ class SequenceLayout {
     this.touch(cur, to);
     const m = member || s.member;
     const name = !m ? callParts(s).name : m.k === 'ctor' ? `new ${m.type.n}` : m.n;
-    const label = `${s.no}. ${s.aw ? 'await ' : ''}${name}${m ? '()' : ''}`;
+    const opened = !!(body && body.length);
+    const out = CG.stepOut(s);
+    // what goes in; when the call is not opened, where its result goes too
+    let label = `${s.no}. ${s.aw ? 'await ' : ''}${name}${m ? CG.argsText(s, 34) : ''}`;
+    if (!opened && out) label += `  → ${out}`;
     const nestFrom = (this.nest.get(cur) || 1) - 1;
     const y0 = this.y;
     this.arrows.push({ from: cur, to, y: y0, s, label, nestFrom, nestTo: this.nest.get(to) || 0, outside: !s.member && !member, stop: s.x });
     this.y += ROW;
-    if (body && body.length) {
+    if (opened) {
       const nest = this.nest.get(to) || 0;
       this.enter(to);
       this.walk(body, to);
@@ -574,7 +623,7 @@ class SequenceLayout {
       this.acts.push({ col: to, y0, y1: this.y, nest });
       // a call within the same class returns along its own activation bar, not with a second arrow
       if (to !== cur) {
-        this.arrows.push({ from: to, to: cur, y: this.y, ret: true, nestFrom: nest, nestTo: nestFrom });
+        this.arrows.push({ from: to, to: cur, y: this.y, ret: true, s, label: out, nestFrom: nest, nestTo: nestFrom });
         this.y += ROW * 0.75;
       } else this.y += ROW * 0.3;
     } else {
@@ -588,7 +637,8 @@ class SequenceLayout {
     const widest = Math.max(...this.cols.map((c) => ctx.measureText(c.label).width));
     ctx.font = '12px Inter';
     const widestLabel = Math.max(0, ...this.arrows.filter((a) => a.label && Math.abs(a.to - a.from) === 1).map((a) => ctx.measureText(a.label).width));
-    this.COL = Math.max(170, widest + 50, widestLabel + 40);
+    // wide enough for the labels between neighbours, but long labels may overrun rather than spread every column
+    this.COL = Math.max(170, widest + 50, Math.min(widestLabel + 40, 380));
     const X = (c) => c * this.COL;
     this.X = X;
     // hit boxes for arrows and notes, now that columns have places
@@ -694,8 +744,12 @@ class SequenceLayout {
     }
 
     // calls and returns
+    const trace = a.trace;
     for (const ar of this.arrows) {
-      const hot = ar.s && (ar.s === sel || ar.s === hov);
+      const role = trace && ar.s && trace.roles.get(ar.s);
+      const traced = role && (!ar.ret || role === 'gives it back' || role === 'makes it');
+      const hot = traced || (ar.s && (ar.s === sel || ar.s === hov));
+      ctx.globalAlpha = trace && !traced && ar.s !== sel ? 0.3 : 1;
       ctx.strokeStyle = hot ? t.accent : ar.ret ? t.edgeSoft : t.edge;
       ctx.lineWidth = hot ? 1.8 : 1.2;
       const fx = X(ar.from) + 5 + (ar.nestFrom || 0) * 6, tx = X(ar.to) - 5 + (ar.nestTo || 0) * 6;
@@ -710,6 +764,7 @@ class SequenceLayout {
         ctx.stroke();
         CG.arrow(ctx, x + 7, ar.y + 14, Math.PI, 7, false);
         if (ar.label) this.label(ctx, t, ar, x + 40, ar.y + 4, 'left');
+        if (traced) this.roleTag(ctx, t, role, x - 110, ar.y + 7);
         continue;
       }
       const dir = Math.sign(X(ar.to) - X(ar.from));
@@ -723,7 +778,9 @@ class SequenceLayout {
       ctx.setLineDash([]);
       CG.arrow(ctx, x1, ar.y, dir > 0 ? 0 : Math.PI, 8, false);
       if (ar.label) this.label(ctx, t, ar, (x0 + x1) / 2, ar.y - 6, 'center');
+      if (traced && !ar.ret) this.roleTag(ctx, t, role, Math.max(x0, x1) + 14, ar.y);
     }
+    ctx.globalAlpha = 1;
 
     // returns and throws inside a method
     for (const n of this.notes) {
@@ -772,7 +829,28 @@ class SequenceLayout {
     void ROW;
   }
 
+  /** What an arrow's step does with the followed value. */
+  roleTag(ctx, t, role, x, y) {
+    ctx.font = '600 11px Inter';
+    const w = ctx.measureText(role).width + 14;
+    ctx.beginPath();
+    ctx.roundRect(x, y - 9, w, 18, 9);
+    ctx.fillStyle = t.accent;
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.fillText(role, x + 7, y + 4);
+  }
+
   label(ctx, t, ar, x, y, align) {
+    if (ar.ret) {
+      // what comes back, on the dashed return arrow
+      ctx.font = 'italic 11.5px Inter';
+      ctx.fillStyle = t.accentText;
+      ctx.textAlign = align;
+      ctx.fillText(ar.label, x, y);
+      ctx.textAlign = 'left';
+      return;
+    }
     ctx.font = ar.outside ? 'italic 12px Inter' : '500 12px Inter';
     ctx.fillStyle = ar.s === this.app.fsel ? t.accentText : ar.outside ? t.text2 : t.text;
     ctx.textAlign = align;
