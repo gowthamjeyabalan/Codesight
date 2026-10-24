@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<CommandTable xmlns="http://schemas.microsoft.com/VisualStudio/2005-10-18/CommandTable" xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <Extern href="stdidcmd.h" />
+  <Extern href="vsshlids.h" />
+  <Include href="KnownImageIds.vsct" />
+
+  <Commands package="guidCodegramPackage">
+    <Buttons>
+      <!-- View > Other Windows > Codegram -->
+      <Button guid="guidCodegramCmdSet" id="ShowCodegram" priority="0x0100" type="Button">
+        <Parent guid="guidSHLMainMenu" id="IDG_VS_WNDO_OTRWNDWS1" />
+        <Icon guid="ImageCatalogGuid" id="DependancyGraph" />
+        <CommandFlag>IconIsMoniker</CommandFlag>
+        <Strings>
+          <ButtonText>Codegram</ButtonText>
+          <!-- lets people bind a shortcut, and run it from the command window as View.Codegram -->
+          <CanonicalName>.View.Codegram</CanonicalName>
+          <LocCanonicalName>.View.Codegram</LocCanonicalName>
+        </Strings>
+      </Button>
+    </Buttons>
+  </Commands>
+
+  <Symbols>
+    <GuidSymbol name="guidCodegramPackage" value="{aff7ea1f-b886-4cd9-b1b0-4a95b44cbd1e}" />
+    <GuidSymbol name="guidCodegramCmdSet" value="{143b2144-7207-4da3-9ed1-e53eb6c13eee}">
+      <IDSymbol name="ShowCodegram" value="0x0100" />
+    </GuidSymbol>
+  </Symbols>
+</CommandTable>
