@@ -1,10 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011" xmlns:d="http://schemas.microsoft.com/developer/vsx-schema-design/2011">
   <Metadata>
-    <Identity Id="Codegram.8ba49079-ed4d-474c-83c1-e967ce7c621c" Version="0.1.0" Language="en-US" Publisher="gowthamjeyabalan" />
-    <DisplayName>Codegram</DisplayName>
-    <Description xml:space="preserve">Maps your code into interactive diagrams: a map of every folder and file, with call graphs and class diagrams to follow.</Description>
-    <Tags>code map; diagram; visualization; architecture; dependency graph; call graph</Tags>
+    <Identity Id="Codegram.8ba49079-ed4d-474c-83c1-e967ce7c621c" Version="0.2.0" Language="en-US" Publisher="gowthamjeyabalan" />
+    <DisplayName>Codesight</DisplayName>
+    <Description xml:space="preserve">Insight into your C# code: see what runs when a button is pressed, class diagrams, call graphs, a live map of every file, and the problems worth a look (hotspots, unused code, uncaught exceptions, the impact of a change).</Description>
+    <Icon>Resources\codesight-icon.png</Icon>
+    <PreviewImage>Resources\codesight-preview.png</PreviewImage>
+    <Tags>code map; diagram; visualization; architecture; dependency graph; call graph; flow; code quality</Tags>
   </Metadata>
   <Installation>
     <InstallationTarget Id="Microsoft.VisualStudio.Community" Version="[17.0,19.0)">

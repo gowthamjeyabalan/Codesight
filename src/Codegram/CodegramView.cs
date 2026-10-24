@@ -87,7 +87,7 @@ namespace Codegram
             try
             {
                 // WebView2 needs a writable profile folder; next to devenv.exe it is not.
-                var data = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Codegram", "WebView2");
+                var data = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Codesight", "WebView2");
                 var env = await CoreWebView2Environment.CreateAsync(null, data);
                 await web.EnsureCoreWebView2Async(env);
                 var core = web.CoreWebView2;
@@ -108,7 +108,7 @@ namespace Codegram
                 {
                     Margin = new System.Windows.Thickness(14),
                     TextWrapping = System.Windows.TextWrapping.Wrap,
-                    Text = "Codegram needs the Microsoft Edge WebView2 Runtime to draw its diagrams. Install it and reopen this window.\n\n" + ex.Message,
+                    Text = "Codesight needs the Microsoft Edge WebView2 Runtime to draw its diagrams. Install it and reopen this window.\n\n" + ex.Message,
                 };
             }
         }
@@ -244,7 +244,7 @@ namespace Codegram
         void Save(string name, string filter, string text, string base64)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
-            var dialog = new Microsoft.Win32.SaveFileDialog { FileName = name ?? "Codegram", Filter = filter ?? "All files|*.*", AddExtension = true, OverwritePrompt = true };
+            var dialog = new Microsoft.Win32.SaveFileDialog { FileName = name ?? "Codesight", Filter = filter ?? "All files|*.*", AddExtension = true, OverwritePrompt = true };
             if (dialog.ShowDialog(System.Windows.Window.GetWindow(this)) != true)
                 return;
             try

@@ -1,10 +1,10 @@
-# Codegram
+# Codesight
 
-A Visual Studio extension that maps your code into interactive diagrams. It follows the Grapht design system, like Overlay and Grapht.
+Insight into your C# code, inside Visual Studio: what runs when a button is pressed, how the classes fit together, and where the problems are. It follows the Grapht design system, like Overlay and Grapht.
 
 Five views, switched in the top bar:
 
-- **Flow:** what happens when something starts, in the order it runs. Pick a starting point (buttons and other events, labelled from your XAML or `+=` subscriptions, commands, web API actions, `Main`, or any method) and Codegram follows the code: every call into your own code, opened up into what that method does, with the `if`/`switch` decisions, loops, `try`/`catch`, early returns and throws around them. Calls through an interface or a virtual method show each implementation they can land in. Draw it as a **sequence** diagram (a column per class, calls going down the page) or as numbered **steps** (a flowchart). Double-click a call to open or close it; **Go to call** and **Go to method** jump to the code.
+- **Flow:** what happens when something starts, in the order it runs. Pick a starting point (buttons and other events, labelled from your XAML or `+=` subscriptions, commands, web API actions, `Main`, or any method) and Codesight follows the code: every call into your own code, opened up into what that method does, with the `if`/`switch` decisions, loops, `try`/`catch`, early returns and throws around them. Calls through an interface or a virtual method show each implementation they can land in. Draw it as a **sequence** diagram (a column per class, calls going down the page) or as numbered **steps** (a flowchart). Double-click a call to open or close it; **Go to call** and **Go to method** jump to the code.
   - **Data:** every call shows what goes in and where its result goes (`ReadAllRows(inputPath) → raw: List<string[]>`); the dashed return arrows carry the returned type. **What it produces** opens up the flow's result types into their fields, nested types and enum values. **Follow** any value (a result, an argument, an input) to see every step that makes it, works on it, takes it, checks it, returns it or throws it, across method boundaries.
 
 - **Classes:** a UML class diagram of the solution's C# (read with Roslyn). Show a namespace, a type and everything it inherits, implements, derives or uses, or the types in a file or folder picked on the map. Boxes list members with their visibility (`+ − # ~`); hollow arrows are inheritance, dashed ones are interfaces, thin ones are fields and properties of another type. Double-click a type for its relations, double-click a member to open it in the editor.
@@ -14,6 +14,7 @@ Five views, switched in the top bar:
 - **Files panel:** browse and search. **Details panel:** language breakdown and the largest files for any selection.
 - The C# model is read again a few seconds after you stop typing. Code the build generates (`obj`, `*.g.cs`) is left out.
 - Updates by itself when files change. Skips `bin`, `obj`, `node_modules`, `target`, `.git` and the patterns in the root `.gitignore`.
+
 **Finding problems**
 - **Hotspots:** colour the Map and Tree by complexity (Language | Complexity), see complexity badges on methods in class boxes, and the most complex methods of any file, folder or the whole solution in Details.
 - **Unused code:** members and types with no use found in the C# are marked in class boxes (dashed outline, "unused") and listed in Details. Overrides, interface implementations, entry points and XAML-created classes are never flagged.
@@ -21,12 +22,12 @@ Five views, switched in the top bar:
 - **Impact:** the **Impact** button on any method or type shows, in the Calls view, everything a change reaches, back to the buttons and other starting points it affects.
 
 **Working with the views**
-- **Follow the editor:** Codegram selects the method or class under your caret (Settings > Follow the editor). Dock Codegram beside the code to see it follow live.
+- **Follow the editor:** Codesight selects the method or class under your caret (Settings > Follow the editor). Dock Codesight beside the code to see it follow live.
 - **Export:** save the whole diagram as PNG or SVG, or copy or save it as Mermaid text.
 
 - Follows the Visual Studio theme, or is set to Dark or Light. The panels are see-through over the diagram (Settings: Acrylic or Clear, panel opacity).
 
-Open it from **View > Other Windows > Codegram**, or run `View.Codegram` in the Command Window.
+Open it from **View > Other Windows > Codesight**, or run `View.Codesight` in the Command Window.
 
 ## Building
 
@@ -36,7 +37,7 @@ Visual Studio 2022 or 2026. The build tools come from NuGet, so the Visual Studi
 "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe" Codegram.sln -restore -p:Configuration=Debug
 ```
 
-This builds `src/Codegram/bin/Debug/Codegram.vsix` and deploys it to the experimental instance (`devenv /rootsuffix Exp`).
+This builds `src/Codegram/bin/Debug/Codegram.vsix` (the folder and project keep the original name Codegram) and deploys it to the experimental instance (`devenv /rootsuffix Exp`).
 
 ## Layout
 

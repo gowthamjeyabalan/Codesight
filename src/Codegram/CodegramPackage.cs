@@ -8,7 +8,7 @@ using Task = System.Threading.Tasks.Task;
 namespace Codegram
 {
     /// <summary>
-    /// The extension's entry point: registers the Codegram window and the View > Other Windows > Codegram command.
+    /// The extension's entry point: registers the Codesight window and the View > Other Windows > Codesight command.
     /// </summary>
     [PackageRegistration(UseManagedResourcesOnly = true, AllowsBackgroundLoading = true)]
     [Guid(PackageGuidString)]
@@ -35,7 +35,7 @@ namespace Codegram
         {
             var window = await ShowToolWindowAsync(typeof(CodegramWindow), 0, create: true, cancellationToken: DisposalToken);
             if (window?.Frame == null)
-                throw new NotSupportedException("Cannot create the Codegram window.");
+                throw new NotSupportedException("Cannot create the Codesight window.");
         }
     }
 }

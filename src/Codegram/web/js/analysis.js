@@ -1,5 +1,5 @@
 'use strict';
-// Problems Codegram points at: complex code, code nothing uses, exceptions nothing catches, and what a change reaches.
+// Problems Codesight points at: complex code, code nothing uses, exceptions nothing catches, and what a change reaches.
 
 // ── complexity ──
 // Cyclomatic complexity bands, calm to hot (Grapht categorical colours).

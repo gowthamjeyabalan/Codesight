@@ -63,6 +63,14 @@
     <VSCTCompile Include="CodegramPackage.vsct">
       <ResourceName>Menus.ctmenu</ResourceName>
     </VSCTCompile>
+    <!-- The Codesight icon for the installer and the Marketplace, and the View menu (brand/, tools/brand). -->
+    <Content Include="Resources\codesight-icon.png">
+      <IncludeInVSIX>true</IncludeInVSIX>
+    </Content>
+    <Content Include="Resources\codesight-preview.png">
+      <IncludeInVSIX>true</IncludeInVSIX>
+    </Content>
+    <None Include="Resources\codesight-menu.png" />
     <!-- The diagram UI, served to WebView2 from the extension folder. -->
     <Content Include="web\**\*">
       <IncludeInVSIX>true</IncludeInVSIX>

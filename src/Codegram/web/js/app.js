@@ -11,8 +11,8 @@
   // ── settings (per viewer, kept in the WebView profile) ──
   const defaults = { theme: 'vs', material: 'acrylic', alpha: 0.8, view: 'map', metric: 'lines', colorBy: 'language', follow: true, members: 'all', depth: 2, flowStyle: 'sequence', files: true, details: true };
   let settings = { ...defaults };
-  try { Object.assign(settings, JSON.parse(localStorage.getItem('codegram.settings') || '{}')); } catch { /* private or blocked storage */ }
-  const save = () => { try { localStorage.setItem('codegram.settings', JSON.stringify(settings)); } catch { /* ignore */ } };
+  try { Object.assign(settings, JSON.parse(localStorage.getItem('codesight.settings') || '{}')); } catch { /* private or blocked storage */ }
+  const save = () => { try { localStorage.setItem('codesight.settings', JSON.stringify(settings)); } catch { /* ignore */ } };
 
   const app = (CG.app = {
     // folder map
@@ -120,7 +120,7 @@
       const c = app.code;
       if (!c) msg = app.codeState === 'analyzing' || !host ? ['Reading C# projects', 'The first read of a big solution can take a moment.'] : null;
       else if (!c.types.length && c.info.error) msg = ['Could not read the C# code', c.info.error];
-      else if (!c.types.length) msg = ['No C# code found', 'Codegram reads the C# projects of the open solution. Open a .sln file to see its classes and calls.'];
+      else if (!c.types.length) msg = ['No C# code found', 'Codesight reads the C# projects of the open solution. Open a .sln file to see its classes and calls.'];
     }
     $('empty').hidden = !msg;
     if (msg) {
@@ -179,7 +179,7 @@
         app.model = app.code = null;
         app.selected = app.focus = app.hover = app.csel = app.scope = app.callFocus = null;
         app.codeState = 'idle';
-        app.emptyMsg = ['No solution open', 'Open a solution or a folder and Codegram maps it here.'];
+        app.emptyMsg = ['No solution open', 'Open a solution or a folder and Codesight maps it here.'];
         renderAll();
         break;
       case 'scanning':
@@ -468,7 +468,7 @@
     else if (app.view === 'calls') what = app.impact ? `Impact of ${app.impact.target.label || app.impact.target.n}` : app.callFocus ? app.callFocus.label : '';
     else if (app.view === 'classes' && app.scope) what = app.scope.ns ? app.scope.ns.name : app.scope.type ? app.scope.type.n : app.scope.path;
     else if (app.model) what = app.focus ? app.focus.name : app.model.root.name;
-    return `Codegram ${VIEW_NAMES[app.view]}${what ? ' - ' + what : ''}`.replace(/[\\/:*?"<>|]/g, '');
+    return `Codesight ${VIEW_NAMES[app.view]}${what ? ' - ' + what : ''}`.replace(/[\\/:*?"<>|]/g, '');
   }
 
   /** Draws the whole diagram (not just what is on screen) onto `make(w, h)`'s context. */
@@ -1407,7 +1407,7 @@
     e.stopPropagation();
     exportPop.hidden = !exportPop.hidden;
     exportPop.style.right = innerWidth - $('export').getBoundingClientRect().right + 'px';
-    $('export-what').textContent = exportName().replace(/^Codegram /, '');
+    $('export-what').textContent = exportName().replace(/^Codesight /, '');
     const mermaid = app.view !== 'map' || !!app.model;
     $('export-mm-copy').disabled = $('export-mm-save').disabled = !mermaid;
   });
