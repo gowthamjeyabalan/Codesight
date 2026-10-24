@@ -14,6 +14,16 @@ Five views, switched in the top bar:
 - **Files panel:** browse and search. **Details panel:** language breakdown and the largest files for any selection.
 - The C# model is read again a few seconds after you stop typing. Code the build generates (`obj`, `*.g.cs`) is left out.
 - Updates by itself when files change. Skips `bin`, `obj`, `node_modules`, `target`, `.git` and the patterns in the root `.gitignore`.
+**Finding problems**
+- **Hotspots:** colour the Map and Tree by complexity (Language | Complexity), see complexity badges on methods in class boxes, and the most complex methods of any file, folder or the whole solution in Details.
+- **Unused code:** members and types with no use found in the C# are marked in class boxes (dashed outline, "unused") and listed in Details. Overrides, interface implementations, entry points and XAML-created classes are never flagged.
+- **Exception map:** the **Exceptions** button in the Flow view shows every throw, the catch that stops it, and in red the ones nothing catches.
+- **Impact:** the **Impact** button on any method or type shows, in the Calls view, everything a change reaches, back to the buttons and other starting points it affects.
+
+**Working with the views**
+- **Follow the editor:** Codegram selects the method or class under your caret (Settings > Follow the editor). Dock Codegram beside the code to see it follow live.
+- **Export:** save the whole diagram as PNG or SVG, or copy or save it as Mermaid text.
+
 - Follows the Visual Studio theme, or is set to Dark or Light. The panels are see-through over the diagram (Settings: Acrylic or Clear, panel opacity).
 
 Open it from **View > Other Windows > Codegram**, or run `View.Codegram` in the Command Window.

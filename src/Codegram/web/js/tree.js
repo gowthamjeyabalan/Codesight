@@ -136,7 +136,8 @@ CG.TreeView = class {
     this.layout(ctx);
     if (this.fitPending) { this.fit(ctx); this.fitPending = false; }
     const a = this.app, q = a.matches, m = a.metric, { k, x: cx, y: cy } = this.cam, H = CG.TreeView.H;
-    const vx0 = -cx / k, vy0 = -cy / k, vx1 = (innerWidth - cx) / k, vy1 = (innerHeight - cy) / k;
+    const vw = CG.viewport ? CG.viewport.w : innerWidth, vh = CG.viewport ? CG.viewport.h : innerHeight;
+    const vx0 = -cx / k, vy0 = -cy / k, vx1 = (vw - cx) / k, vy1 = (vh - cy) / k;
     ctx.save();
     ctx.translate(cx, cy);
     ctx.scale(k, k);
@@ -195,7 +196,7 @@ CG.TreeView = class {
         ctx.lineWidth = 1.6;
         ctx.stroke();
       } else {
-        ctx.fillStyle = CG.langColor(n.lang);
+        ctx.fillStyle = CG.fileColor(n, t);
         ctx.fill();
       }
       if (text) {

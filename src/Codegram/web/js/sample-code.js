@@ -4,6 +4,7 @@ CG.sampleCode = function () {
   let id = 0;
   const types = [], byName = new Map(), members = new Map();
   const access = { '+': 'public', '-': 'private', '#': 'protected', '~': 'internal' };
+  const COMPLEX = { 'OrderService.Place': 14, 'PricingService.Price': 11, 'Order.Recalculate': 8, 'SmtpMailService.Render': 23, 'CsvExporter.Export': 9, 'OrdersController.Post': 7 };
   // T(namespace, name, kind, file, line, members, extra): members are "<access> <kind> <name><signature>"
   const T = (ns, n, k, f, l, ms, extra = {}) => {
     const short = n.replace(/<.*/, '');
@@ -18,10 +19,16 @@ CG.sampleCode = function () {
       if (ret && kind !== 'ctor' && ret[1] !== 'void') x.r = ret[1];
       const params = /^\((.*)\)/.exec(x.s);
       if (params && params[1]) x.pn = params[1].split(', ').map((p) => p.split(' ').pop());
-      line += kind === 'method' || kind === 'ctor' ? 9 : 1;
+      // made-up size and complexity: methods take nine lines, a few named below are complex
+      const body = kind === 'method' || kind === 'ctor';
+      x.le = line + (body ? 7 : 0);
+      if (body || kind === 'prop') x.cx = COMPLEX[`${short}.${name}`] || (body ? 1 + (name.length % 4) : 1);
+      if (x.cx > 6) x.nd = Math.min(5, Math.floor(x.cx / 4));
+      line += body ? 9 : 1;
       t.m.push(x);
       members.set(`${short}.${name}`, x);
     }
+    t.le = line + 1;
     types.push(t);
     byName.set(short, t);
   };
@@ -47,7 +54,8 @@ CG.sampleCode = function () {
   T(I, 'Outbox', 'class', 'src/Contoso.Core/Infrastructure/Outbox.cs', 4, ['+ method Enqueue(DomainEvent e)', '+ method Flush(): Task']);
   T(S, 'IPricingService', 'interface', 'src/Contoso.Api/Services/PricingService.cs', 3, ['+ method Price(Product product, Customer customer): Money']);
   T(S, 'PricingService', 'class', 'src/Contoso.Api/Services/PricingService.cs', 9, ['- field taxes: TaxTable', '+ ctor ctor(TaxTable taxes)', '+ method Price(Product product, Customer customer): Money', '- method Discount(Customer customer): decimal']);
-  T(S, 'TaxTable', 'class', 'src/Contoso.Api/Services/PricingService.cs', 60, ['+ method RateFor(string country): decimal'], { mod: 'sealed' });
+  T(S, 'TaxTable', 'class', 'src/Contoso.Api/Services/PricingService.cs', 60, ['+ method RateFor(string country): decimal', '- method LegacyRate(string country): decimal'], { mod: 'sealed' });
+  T(S, 'CsvExporter', 'class', 'src/Contoso.Api/Services/CsvExporter.cs', 5, ['+ method Export(List<Order> orders): string', '- method Escape(string value): string']);
   T(S, 'IMailService', 'interface', 'src/Contoso.Api/Services/MailService.cs', 3, ['+ method SendConfirmation(Order order): Task']);
   T(S, 'SmtpMailService', 'class', 'src/Contoso.Api/Services/MailService.cs', 9, ['+ method SendConfirmation(Order order): Task', '- method Render(Order order): string']);
   T(S, 'OrderService', 'class', 'src/Contoso.Api/Services/OrderService.cs', 8, ['- field orders: IRepository<Order>', '- field pricing: IPricingService', '- field mail: IMailService', '- field work: UnitOfWork', '+ ctor ctor(IRepository<Order> orders, IPricingService pricing, IMailService mail, UnitOfWork work)', '+ method Find(Guid id): Task<Order>', '+ method Place(Customer customer, List<Product> products): Task<Order>', '+ method Cancel(Guid id, string reason): Task']);
@@ -96,7 +104,26 @@ CG.sampleCode = function () {
     ['Product.Reprice', 'Guard.NotNull'], ['MainWindow.PlaceOrderButton_Click', 'OrderService.Place'],
     ['MainWindow.PlaceOrderButton_Click', 'MainWindow.ShowError'], ['MainWindow.CancelButton_Click', 'OrderService.Cancel'],
   ].forEach(([from, to, n]) => call(from, to, n));
-  rel('MainWindow', { u: [ref('OrderService')] });
+  rel('MainWindow', { u: [ref('OrderService')], xaml: true, fw: true });
+  call('CsvExporter.Export', 'CsvExporter.Escape', 3);
 
-  return { type: 'code', projects: ['Contoso.Api', 'Contoso.Core'], types, calls, truncated: false, maxTypes: 20000, seconds: 0.42 };
+  // made-up reads of properties and fields: each type's methods use its own data, a few are left with no use
+  const refs = [], unread = new Set(['Product.Sku', 'Customer.Email', 'OrderLine.UnitPrice']);
+  for (const t of types) {
+    const reader = t.m.find((x) => x.k === 'method' || x.k === 'ctor');
+    if (!reader) continue;
+    for (const x of t.m) if ((x.k === 'prop' || x.k === 'field') && !unread.has(`${t.n.replace(/<.*/, '')}.${x.n}`)) refs.push(reader.id, x.id, 1);
+  }
+  // interface implementations, as CodeAnalyzer.cs links them
+  for (const t of types)
+    for (const iid of t.i || []) {
+      const iface = types.find((x) => x.id === iid);
+      for (const im of iface.m) {
+        const impl = t.m.find((x) => x.n === im.n);
+        if (impl) { impl.im = [im.id]; impl.ov = true; }
+      }
+    }
+  for (const n of ['Entity.Equals', 'Entity.GetHashCode']) members.get(n).ov = true;
+
+  return { type: 'code', projects: ['Contoso.Api', 'Contoso.Core'], types, calls, refs, truncated: false, maxTypes: 20000, seconds: 0.42 };
 };

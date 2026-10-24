@@ -33,6 +33,12 @@ namespace Codegram
         /// <summary>Types of fields and properties (associations), other than the base and the interfaces.</summary>
         [JsonProperty("u", NullValueHandling = NullValueHandling.Ignore)] public List<int> Uses;
         [JsonProperty("m")] public List<CodeMember> Members = new List<CodeMember>();
+        /// <summary>Zero-based last line of the declaration.</summary>
+        [JsonProperty("le")] public int LineEnd;
+        /// <summary>A XAML file declares this class (x:Class), so XAML creates it.</summary>
+        [JsonProperty("xaml", DefaultValueHandling = DefaultValueHandling.Ignore)] public bool Xaml;
+        /// <summary>Derives from a class outside the solution (Window, Controller...), which may create it by itself.</summary>
+        [JsonProperty("fw", DefaultValueHandling = DefaultValueHandling.Ignore)] public bool Framework;
     }
 
     sealed class CodeMember
@@ -57,6 +63,16 @@ namespace Codegram
         [JsonProperty("r", NullValueHandling = NullValueHandling.Ignore)] public string Returns;
         /// <summary>Parameter names of a method, to follow a value from an argument into the method.</summary>
         [JsonProperty("pn", NullValueHandling = NullValueHandling.Ignore)] public List<string> Parameters;
+        /// <summary>Zero-based last line of the declaration.</summary>
+        [JsonProperty("le")] public int LineEnd;
+        /// <summary>Cyclomatic complexity: 1 plus each decision (if, loop, case, catch, &amp;&amp;, ||, ??, ?:).</summary>
+        [JsonProperty("cx", DefaultValueHandling = DefaultValueHandling.Ignore)] public int Complexity;
+        /// <summary>How deep statements nest at most (if inside for inside try is 3).</summary>
+        [JsonProperty("nd", DefaultValueHandling = DefaultValueHandling.Ignore)] public int Nesting;
+        /// <summary>Members of the solution this one overrides or implements.</summary>
+        [JsonProperty("im", NullValueHandling = NullValueHandling.Ignore)] public List<int> Implements;
+        /// <summary>Overrides or implements something, possibly outside the solution (Dispose, ToString), so it is called that way.</summary>
+        [JsonProperty("ov", DefaultValueHandling = DefaultValueHandling.Ignore)] public bool Overrides;
     }
 
     sealed class CodeModel
@@ -65,6 +81,10 @@ namespace Codegram
         public List<CodeType> Types = new List<CodeType>();
         /// <summary>Calls as flat triples: caller member id, callee member id, number of call sites.</summary>
         public List<int> Calls = new List<int>();
+        /// <summary>Uses that are not calls, as flat triples: a property or field read or written, a method passed as a delegate.</summary>
+        public List<int> Refs = new List<int>();
+        /// <summary>Types named in code (new, typeof, casts, is, generic arguments) as pairs: member id, type id.</summary>
+        public List<int> TypeRefs = new List<int>();
         public bool Truncated;
         public double Seconds;
         /// <summary>Documentation id of every member to its id, to find a member's symbol again for its flow.</summary>
@@ -90,6 +110,9 @@ namespace Codegram
             public readonly Dictionary<string, int> MembersByKey = new Dictionary<string, int>();
             public readonly List<(INamedTypeSymbol symbol, CodeType type)> Declared = new List<(INamedTypeSymbol, CodeType)>();
             public readonly Dictionary<long, int> Calls = new Dictionary<long, int>();
+            public readonly Dictionary<long, int> Refs = new Dictionary<long, int>();
+            public readonly HashSet<long> TypeRefs = new HashSet<long>();
+            public readonly List<(ISymbol symbol, CodeMember member)> MemberSymbols = new List<(ISymbol, CodeMember)>();
             public readonly Dictionary<int, CodeMember> Members = new Dictionary<int, CodeMember>();
             /// <summary>Event handlers by "Namespace.Type.Method", to label them with the control from XAML.</summary>
             public readonly Dictionary<string, CodeMember> Handlers = new Dictionary<string, CodeMember>();
@@ -123,6 +146,8 @@ namespace Codegram
 
             foreach (var (symbol, type) in c.Declared)
                 Relate(c, symbol, type);
+            foreach (var (symbol, member) in c.MemberSymbols)
+                LinkImplementations(c, symbol, member);
             foreach (var dir in projectDirs)
                 ReadXaml(c, dir, ct);
 
@@ -139,6 +164,17 @@ namespace Codegram
                 c.Model.Calls.Add((int)(pair.Key >> 32));
                 c.Model.Calls.Add((int)(pair.Key & 0xffffffff));
                 c.Model.Calls.Add(pair.Value);
+            }
+            foreach (var pair in c.TypeRefs)
+            {
+                c.Model.TypeRefs.Add((int)(pair >> 32));
+                c.Model.TypeRefs.Add((int)(pair & 0xffffffff));
+            }
+            foreach (var pair in c.Refs)
+            {
+                c.Model.Refs.Add((int)(pair.Key >> 32));
+                c.Model.Refs.Add((int)(pair.Key & 0xffffffff));
+                c.Model.Refs.Add(pair.Value);
             }
             c.Model.Seconds = watch.Elapsed.TotalSeconds;
             foreach (var pair in c.MembersByKey)
@@ -221,6 +257,9 @@ namespace Codegram
                 Project = project,
                 File = file,
                 Line = loc.GetLineSpan().StartLinePosition.Line,
+                LineEnd = EndLine(symbol, loc),
+                Framework = symbol.TypeKind == TypeKind.Class && symbol.BaseType != null && symbol.BaseType.SpecialType != SpecialType.System_Object
+                    && !symbol.BaseType.Locations.Any(l => l.IsInSource),
             };
             c.TypesByKey[key] = type;
             c.Model.Types.Add(type);
@@ -253,8 +292,13 @@ namespace Codegram
                     Entry = member is IMethodSymbol method ? EntryKind(method) : null,
                     Returns = ValueType(member),
                     Parameters = member is IMethodSymbol withArgs && withArgs.Parameters.Length > 0 ? withArgs.Parameters.Select(p => p.Name).ToList() : null,
+                    LineEnd = EndLine(member, mloc),
                 };
+                var declaration = Declaration(member);
+                if (declaration != null && (member is IMethodSymbol || member is IPropertySymbol))
+                    (m.Complexity, m.Nesting) = Measure(declaration);
                 c.MembersByKey[mkey] = m.Id;
+                c.MemberSymbols.Add((member, m));
                 c.Members[m.Id] = m;
                 type.Members.Add(m);
                 if (m.Entry == "event")
@@ -331,6 +375,12 @@ namespace Codegram
                     LabelSubscription(c, model, add, ct);
                     continue;
                 }
+                if (node is IdentifierNameSyntax name)
+                {
+                    model = model ?? compilation.GetSemanticModel(tree);
+                    ReadReference(c, model, name, ct);
+                    continue;
+                }
                 if (!(node is InvocationExpressionSyntax || node is ObjectCreationExpressionSyntax || node is ImplicitObjectCreationExpressionSyntax || node is ConstructorInitializerSyntax))
                     continue;
                 model = model ?? compilation.GetSemanticModel(tree);
@@ -350,6 +400,128 @@ namespace Codegram
                 long key = ((long)from.Value << 32) | (uint)callee.Value;
                 c.Calls[key] = c.Calls.TryGetValue(key, out var n) ? n + 1 : 1;
             }
+        }
+
+        /// <summary>
+        /// A use that is not a call: a property, field or event read or written, or a method passed along as a
+        /// delegate (list.ForEach(Print), button.Click += OnClick). The name of a call is the call itself and is skipped.
+        /// </summary>
+        static void ReadReference(Context c, SemanticModel model, IdentifierNameSyntax name, CancellationToken ct)
+        {
+            var symbol = model.GetSymbolInfo(name, ct).Symbol;
+            if (symbol is INamedTypeSymbol named)
+            {
+                if (Find(c, named) is CodeType used && Caller(model.GetEnclosingSymbol(name.SpanStart, ct)) is ISymbol user && FindMember(c, user) is int by)
+                    c.TypeRefs.Add(((long)by << 32) | (uint)used.Id);
+                return;
+            }
+            if (symbol is IMethodSymbol method)
+            {
+                SyntaxNode called = name.Parent is MemberAccessExpressionSyntax ma && ma.Name == name ? ma
+                    : name.Parent is MemberBindingExpressionSyntax mb && mb.Name == name ? mb
+                    : (SyntaxNode)name;
+                if (called.Parent is InvocationExpressionSyntax inv && inv.Expression == called)
+                    return;
+                symbol = method.ReducedFrom ?? method;
+            }
+            else if (!(symbol is IPropertySymbol || symbol is IFieldSymbol || symbol is IEventSymbol))
+                return;
+            var to = FindMember(c, symbol);
+            if (to == null)
+                return;
+            var caller = Caller(model.GetEnclosingSymbol(name.SpanStart, ct));
+            var from = caller == null ? null : FindMember(c, caller);
+            if (from == null || from == to)
+                return;
+            long key = ((long)from.Value << 32) | (uint)to.Value;
+            c.Refs[key] = c.Refs.TryGetValue(key, out var n) ? n + 1 : 1;
+        }
+
+        /// <summary>The overridden member and the interface members this member implements; Overrides is set even when they are outside the solution.</summary>
+        static void LinkImplementations(Context c, ISymbol symbol, CodeMember member)
+        {
+            var targets = new List<ISymbol>();
+            if (symbol is IMethodSymbol m && m.OverriddenMethod != null) targets.Add(m.OverriddenMethod);
+            if (symbol is IPropertySymbol p && p.OverriddenProperty != null) targets.Add(p.OverriddenProperty);
+            if (symbol is IEventSymbol e && e.OverriddenEvent != null) targets.Add(e.OverriddenEvent);
+            var type = symbol.ContainingType;
+            if (type != null && !symbol.IsStatic)
+                foreach (var iface in type.AllInterfaces)
+                    foreach (var im in iface.GetMembers())
+                        if (SymbolEqualityComparer.Default.Equals(type.FindImplementationForInterfaceMember(im), symbol))
+                            targets.Add(im);
+            if (targets.Count == 0)
+                return;
+            member.Overrides = true;
+            foreach (var t in targets)
+                if (FindMember(c, t) is int id && id != member.Id)
+                    (member.Implements = member.Implements ?? new List<int>()).Add(id);
+        }
+
+        /// <summary>The declaration of a symbol in source the author wrote.</summary>
+        static SyntaxNode Declaration(ISymbol symbol)
+        {
+            foreach (var reference in symbol.DeclaringSyntaxReferences)
+                if (!IsGenerated(reference.SyntaxTree.FilePath))
+                    return reference.GetSyntax();
+            return null;
+        }
+
+        static int EndLine(ISymbol symbol, Location fallback)
+        {
+            var node = Declaration(symbol);
+            // a field's declarator is one variable; its statement is the whole line
+            if (node is VariableDeclaratorSyntax && node.Parent?.Parent != null)
+                node = node.Parent.Parent;
+            return (node?.GetLocation() ?? fallback).GetLineSpan().EndLinePosition.Line;
+        }
+
+        /// <summary>Cyclomatic complexity and deepest nesting of a member's code.</summary>
+        static (int complexity, int nesting) Measure(SyntaxNode declaration)
+        {
+            int decisions = 0, deepest = 0;
+            void Walk(SyntaxNode n, int depth)
+            {
+                foreach (var child in n.ChildNodes())
+                {
+                    int d = depth;
+                    switch (child)
+                    {
+                        case IfStatementSyntax _:
+                            decisions++;
+                            // else if continues a chain rather than nesting deeper
+                            if (!(n is ElseClauseSyntax)) d++;
+                            break;
+                        case ForStatementSyntax _:
+                        case ForEachStatementSyntax _:
+                        case ForEachVariableStatementSyntax _:
+                        case WhileStatementSyntax _:
+                        case DoStatementSyntax _:
+                            decisions++;
+                            d++;
+                            break;
+                        case SwitchStatementSyntax _:
+                        case TryStatementSyntax _:
+                            d++;
+                            break;
+                        case CatchClauseSyntax _:
+                        case SwitchExpressionArmSyntax _:
+                        case ConditionalExpressionSyntax _:
+                            decisions++;
+                            break;
+                        case SwitchSectionSyntax section:
+                            decisions += section.Labels.Count(l => !(l is DefaultSwitchLabelSyntax));
+                            break;
+                        case BinaryExpressionSyntax b when b.IsKind(SyntaxKind.LogicalAndExpression) || b.IsKind(SyntaxKind.LogicalOrExpression) || b.IsKind(SyntaxKind.CoalesceExpression):
+                            decisions++;
+                            break;
+                    }
+                    deepest = Math.Max(deepest, d);
+                    Walk(child, d);
+                }
+            }
+            Walk(declaration, 0);
+            return (1 + decisions, deepest);
         }
 
         /// <summary>The member a call belongs to: lambdas and local functions count for the member around them, accessors for their property.</summary>
@@ -433,7 +605,7 @@ namespace Codegram
         /// <summary>Labels event handlers with the XAML element that names them: Button "Convert" · Click.</summary>
         static void ReadXaml(Context c, string dir, CancellationToken ct)
         {
-            if (c.Handlers.Count == 0 || dir == null || !Directory.Exists(dir))
+            if (dir == null || !Directory.Exists(dir))
                 return;
             var pending = new Stack<string>();
             pending.Push(dir);
@@ -467,6 +639,8 @@ namespace Codegram
             var cls = (string)doc.Root?.Attribute(XamlNs + "Class");
             if (cls == null)
                 return;
+            if (c.TypesByKey.TryGetValue("T:" + cls, out var created))
+                created.Xaml = true;
             foreach (var element in doc.Root.DescendantsAndSelf())
             {
                 foreach (var attribute in element.Attributes())

@@ -9,7 +9,7 @@
   const LIST_MAX = 300;
 
   // ── settings (per viewer, kept in the WebView profile) ──
-  const defaults = { theme: 'vs', material: 'acrylic', alpha: 0.8, view: 'map', metric: 'lines', members: 'all', depth: 2, flowStyle: 'sequence', files: true, details: true };
+  const defaults = { theme: 'vs', material: 'acrylic', alpha: 0.8, view: 'map', metric: 'lines', colorBy: 'language', follow: true, members: 'all', depth: 2, flowStyle: 'sequence', files: true, details: true };
   let settings = { ...defaults };
   try { Object.assign(settings, JSON.parse(localStorage.getItem('codegram.settings') || '{}')); } catch { /* private or blocked storage */ }
   const save = () => { try { localStorage.setItem('codegram.settings', JSON.stringify(settings)); } catch { /* ignore */ } };
@@ -23,6 +23,8 @@
     csel: null, scope: null, callFocus: null, codeMatches: null,
     // flow: the starting member, its steps, the picked step
     flowEntry: null, flow: null, fsel: null, flowVersion: 0, flowLoads: 0, flowStyle: settings.flowStyle, trace: null,
+    // problems: file colours, and the reach of a change shown in the Calls view
+    colorBy: settings.colorBy, impact: null,
     // shared
     hover: null, metric: settings.metric, view: settings.view, membersMode: settings.members, depth: +settings.depth,
     region: { x: 0, y: 0, w: 0, h: 0 }, t: null, emptyMsg: null,
@@ -56,7 +58,7 @@
       accentSoft: dark ? 'rgba(10,132,255,0.22)' : 'rgba(10,132,255,0.16)',
       hoverSoft: dark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)',
       label: 'rgba(20,22,28,0.9)', labelSoft: 'rgba(20,22,28,0.62)',
-      danger: v('--danger'), accentText: v('--accent-text'), labelBg: v('--bg-control'),
+      danger: v('--danger'), accentText: v('--accent-text'), labelBg: v('--bg-control'), warn: v('--warning'), canvas: v('--canvas'),
     };
     redraw();
   }
@@ -74,6 +76,10 @@
     $('members').hidden = app.view !== 'classes';
     $('depth-group').hidden = app.view !== 'calls';
     $('flowstyle').hidden = app.view !== 'flow';
+    $('exc-toggle').hidden = app.view !== 'flow';
+    $('exc-toggle').classList.toggle('on', !!(app.trace && app.trace.name === 'exceptions'));
+    $('colorby').hidden = app.view !== 'map' && app.view !== 'tree';
+    if (app.impact) $('depth-group').hidden = true;
     const left = showFiles ? 284 : 10, right = showDetails ? 284 : 10;
     const crumbs = !!app.model && $('empty').hidden && hasCrumbs();
     const top = crumbs ? 100 : 64;
@@ -141,6 +147,10 @@
         if (f.data.stopped) fs += ` · <span class="warn">Stopped after ${f.budget} calls.</span>`;
         return setStatus(fs + ' · double-click a call to open or close it');
       }
+      if (app.view === 'calls' && app.impact) {
+        const im = app.impact;
+        return setStatus(`Changing ${CG.esc(im.target.label || im.target.n)} reaches ${CG.plural(im.affected.length, 'method')} in ${CG.plural(im.types.size, 'class', 'classes')}, from ${CG.plural(im.entries.length, 'starting point')}`);
+      }
       const cv = views.classes;
       if (app.view === 'classes' && cv.total > CG.ClassView.MAX_TYPES) s += ` · <span class="warn">Showing ${CG.ClassView.MAX_TYPES} of ${cv.total} types. Pick a smaller namespace or a type.</span>`;
       if (i.truncated) s += ` · <span class="warn">Stopped at ${i.maxTypes} types.</span>`;
@@ -151,6 +161,10 @@
     let s = `${CG.plural(r.files, 'file')}, ${CG.plural(r.lines, 'line')}, ${CG.size(r.bytes)}`;
     if (i && i.seconds != null) s += ` · mapped in ${i.seconds < 0.01 ? 'under 0.01' : CG.trim(i.seconds, 2)} s`;
     if (i && i.truncated) s += ` · <span class="warn">Stopped at ${i.maxFiles} files.</span>`;
+    if (app.colorBy === 'complexity')
+      s += app.code
+        ? ' · complexity of the most complex method:' + CG.CX_BANDS.map((b) => `<span class="legend"><i style="background:${b.color}"></i>${b.label}</span>`).join('')
+        : ' · reading C# for complexity…';
     setStatus(s);
   }
 
@@ -189,6 +203,15 @@
       case 'flowResult':
         loadFlow(m);
         break;
+      case 'caret':
+        followCaret(m);
+        break;
+      case 'saved':
+        setStatus(m.error ? `<span class="warn">Could not save: ${CG.esc(m.error)}</span>` : `Saved to ${CG.esc(m.path)}`);
+        break;
+      case 'copied':
+        setStatus(m.error ? `<span class="warn">${CG.esc(m.error)}</span>` : 'Copied as Mermaid. Paste it into Markdown, GitHub or any Mermaid viewer.');
+        break;
     }
   }
 
@@ -217,12 +240,12 @@
     if (!app.focus || !app.focus.kids) app.focus = app.model.root;
     search();
     renderAll();
-    ensureCode();
+    ensureCode(app.colorBy === 'complexity');
   }
 
   /** Asks for the C# model the first time a code view is shown. */
-  function ensureCode() {
-    if (!isCode() || app.code || app.codeState === 'analyzing' || !app.model) return;
+  function ensureCode(always) {
+    if (!(isCode() || always) || app.code || app.codeState === 'analyzing' || !app.model) return;
     app.codeState = 'analyzing';
     if (host) send({ type: 'analyze' });
     else setTimeout(() => onHost(CG.sampleCode()), 250);
@@ -244,6 +267,10 @@
     if (s && s.kind === 'files') { const n = CG.find(app.model, s.path); const types = CG.typesUnder(app.code, n); if (types.length) setScope(scopeFiles(n, types)); }
     if (!app.scope) defaultScope();
     if (!app.callFocus) app.callFocus = CG.busiest(app.code.members);
+    if (app.impact) {
+      const target = CG.findCode(app.code, CG.codeKey(app.impact.target));
+      app.impact = target ? CG.impactOf(target) : null;
+    }
     const entryKey = app.flowEntry && CG.codeKey(app.flowEntry);
     app.flowEntry = CG.findCode(app.code, entryKey);
     app.flow = null;
@@ -332,6 +359,208 @@
     else setStatus(`In Visual Studio this opens ${CG.esc(s.f)} at line ${s.l + 1}.`);
   }
 
+  // ── impact: what a change reaches ──
+  function startImpact(x) {
+    if (!x || (x.ck !== 'member' && x.ck !== 'type')) return;
+    app.impact = CG.impactOf(x);
+    app.csel = null;
+    if (app.view !== 'calls') switchView('calls');
+    else renderAll();
+  }
+
+  function stopImpact() {
+    const target = app.impact && app.impact.target;
+    app.impact = null;
+    if (target && target.ck === 'member' && CG.isMethod(target)) app.callFocus = target;
+    renderAll();
+  }
+
+  // ── exceptions in a flow ──
+  function showExceptions() {
+    const f = app.flow;
+    if (!f || f.state !== 'ready') return;
+    const map = CG.exceptionMap(f.data);
+    const roles = new Map(), tones = new Map();
+    for (const c of map.throws) {
+      const where = c.branch ? `${c.branch.c}${c.by.l != null ? ` (line ${c.by.l + 1})` : ''}` : '';
+      roles.set(c.step, c.by ? (c.maybe ? `may be caught: ${c.branch.c}` : `caught: ${c.branch.c}`) : 'not caught');
+      if (!c.by) tones.set(c.step, 'danger');
+      c.where = where;
+      for (let p = c.step.parent; p; p = p.parent) if (CG.canOpen(p)) p.open = true;
+    }
+    for (const [tryStep, count] of map.catches) roles.set(tryStep, `catches ${count}`);
+    const list = [];
+    const visit = (s) => {
+      if (roles.has(s)) list.push({ step: s, role: roles.get(s) });
+      (s.s || []).forEach(visit);
+      (s.b || []).forEach((b) => b.s.forEach(visit));
+    };
+    visit(f.data.root);
+    app.trace = { name: 'exceptions', title: 'Exceptions in this flow', roles, tones, list, exceptions: map };
+    app.flowVersion++;
+    renderDetails();
+    layout();
+  }
+
+  // ── following the editor ──
+  /** The editor's caret moved: show the same place in the open view. */
+  function followCaret(m) {
+    if (!settings.follow || !m.path) return;
+    const rel = m.path.replace(/\\/g, '/'), path = rel.toLowerCase(), line = m.line;
+    const c = app.code;
+    let member = null, type = null;
+    if (c) {
+      for (const x of c.members)
+        if (x.file.toLowerCase() === path && x.l <= line && line <= x.le && (!member || x.le - x.l < member.le - member.l)) member = x;
+      for (const t of c.types)
+        if (t.f.toLowerCase() === path && t.l <= line && line <= t.le && (!type || t.le - t.l < type.le - type.l)) type = t;
+    }
+    switch (app.view) {
+      case 'map':
+      case 'tree': {
+        const n = app.model && CG.find(app.model, rel);
+        if (n && n !== app.selected) select(n, 'editor');
+        break;
+      }
+      case 'classes': {
+        const x = member || type;
+        if (x && x !== app.csel) selectCode(x, 'editor');
+        break;
+      }
+      case 'calls':
+        if (member && CG.isMethod(member) && member !== app.csel) {
+          if (!app.impact && !views.calls.byMember.has(member)) app.callFocus = member;
+          selectCode(member, 'editor');
+        }
+        break;
+      case 'flow': {
+        const f = app.flow;
+        if (!f || f.state !== 'ready') break;
+        // the step on the caret's line, or else the call into the method the caret is in
+        let best = null;
+        const find = (test) => {
+          const visit = (s) => {
+            if (best) return;
+            if (test(s)) best = s;
+            (s.s || []).forEach(visit);
+            (s.b || []).forEach((b) => b.s.forEach(visit));
+          };
+          visit(f.data.root);
+        };
+        find((s) => s.f && s.f.toLowerCase() === path && s.l === line);
+        if (!best && member) find((s) => s.member === member);
+        if (best && best !== app.fsel) {
+          for (let p = best.parent; p; p = p.parent)
+            if (CG.canOpen(p) && !p.open) { p.open = true; app.flowVersion++; }
+          selectStep(best, 'editor');
+        }
+        break;
+      }
+    }
+  }
+
+  // ── export ──
+  const VIEW_NAMES = { map: 'Map', tree: 'Tree', classes: 'Classes', calls: 'Calls', flow: 'Flow' };
+
+  function exportName() {
+    let what = '';
+    if (app.view === 'flow' && app.flowEntry) what = app.flowEntry.ui || app.flowEntry.label;
+    else if (app.view === 'calls') what = app.impact ? `Impact of ${app.impact.target.label || app.impact.target.n}` : app.callFocus ? app.callFocus.label : '';
+    else if (app.view === 'classes' && app.scope) what = app.scope.ns ? app.scope.ns.name : app.scope.type ? app.scope.type.n : app.scope.path;
+    else if (app.model) what = app.focus ? app.focus.name : app.model.root.name;
+    return `Codegram ${VIEW_NAMES[app.view]}${what ? ' - ' + what : ''}`.replace(/[\\/:*?"<>|]/g, '');
+  }
+
+  /** Draws the whole diagram (not just what is on screen) onto `make(w, h)`'s context. */
+  function renderExport(make) {
+    const v = view(), t = app.t, pad = 32;
+    const oldRegion = app.region;
+    let w, h, restore;
+    if (app.view === 'map') {
+      w = Math.max(oldRegion.w, 1200);
+      h = Math.max(oldRegion.h, 800);
+      app.region = { x: pad, y: pad, w, h };
+      w += pad * 2;
+      h += pad * 2;
+      restore = () => { views.map.key = ''; };
+    } else {
+      v.layout(ctx);
+      const b = v.bounds();
+      if (!isFinite(b.x0)) return null;
+      w = b.x1 - b.x0 + pad * 2;
+      h = b.y1 - b.y0 + pad * 2;
+      const cam = { x: v.cam.x, y: v.cam.y, k: v.cam.k }, fit = v.fitPending;
+      Object.assign(v.cam, { x: pad - b.x0, y: pad - b.y0, k: 1 });
+      v.fitPending = false;
+      app.region = { x: 0, y: 0, w, h };
+      restore = () => { Object.assign(v.cam, cam); v.fitPending = fit; };
+    }
+    CG.viewport = { w, h };
+    const hover = app.hover;
+    app.hover = null;
+    const c = make(w, h);
+    c.fillStyle = t.canvas;
+    c.fillRect(0, 0, w, h);
+    try { v.draw(c, t); }
+    finally {
+      CG.viewport = null;
+      app.hover = hover;
+      app.region = oldRegion;
+      restore();
+      redraw();
+    }
+    return { c, w, h };
+  }
+
+  function mermaidText() {
+    switch (app.view) {
+      case 'classes': views.classes.layout(ctx); return CG.mermaid.classes(views.classes);
+      case 'calls': views.calls.layout(ctx); return CG.mermaid.calls(views.calls, app.callFocus);
+      case 'flow': return app.flow && app.flow.state === 'ready' ? (app.flowStyle === 'steps' ? CG.mermaid.steps(app.flow.data) : CG.mermaid.sequence(app.flow.data)) : null;
+      default: return app.model ? CG.mermaid.tree(app.model, views.tree.open) : null;
+    }
+  }
+
+  /** Hands a file to Visual Studio to save, or downloads it in a plain browser. */
+  function saveFile(name, filter, text, base64, mime) {
+    if (host) return send({ type: 'save', name, filter, text, base64 });
+    const a = document.createElement('a');
+    a.href = base64 ? `data:${mime};base64,${base64}` : URL.createObjectURL(new Blob([text], { type: mime }));
+    a.download = name;
+    a.click();
+  }
+
+  function exportAs(kind) {
+    $('export-pop').hidden = true;
+    const name = exportName();
+    if (kind === 'png') {
+      let canvasEl = null, scale = 2;
+      const out = renderExport((w, h) => {
+        scale = Math.min(2, 16000 / Math.max(w, h));
+        canvasEl = document.createElement('canvas');
+        canvasEl.width = Math.ceil(w * scale);
+        canvasEl.height = Math.ceil(h * scale);
+        const c = canvasEl.getContext('2d');
+        c.scale(scale, scale);
+        return c;
+      });
+      if (!out) return setStatus('<span class="warn">Nothing to export yet.</span>');
+      saveFile(name + '.png', 'PNG image|*.png', null, canvasEl.toDataURL('image/png').split(',')[1], 'image/png');
+    } else if (kind === 'svg') {
+      let svg = null;
+      const out = renderExport((w, h) => (svg = new CG.SvgContext(w, h)));
+      if (!out) return setStatus('<span class="warn">Nothing to export yet.</span>');
+      saveFile(name + '.svg', 'SVG image|*.svg', svg.toString(), null, 'image/svg+xml');
+    } else {
+      const text = mermaidText();
+      if (!text) return setStatus('<span class="warn">Nothing to export yet.</span>');
+      if (kind === 'mermaid-copy') {
+        if (host) send({ type: 'copy', text });
+        else navigator.clipboard.writeText(text).then(() => onHost({ type: 'copied' }));
+      } else saveFile(name + '.mmd', 'Mermaid diagram|*.mmd', text, null, 'text/plain');
+    }
+  }
+
   // ── code scopes (what the Classes view shows) ──
   const scopeNs = (ns) => ({ kind: 'ns', ns, key: CG.codeKey(ns) });
   const scopeType = (type) => ({ kind: 'type', type, key: CG.codeKey(type) });
@@ -383,6 +612,7 @@
 
   function focusCalls(x) {
     if (!x || !CG.isMethod(x)) return;
+    app.impact = null;
     app.callFocus = x;
     app.csel = x;
     if (app.view !== 'calls') switchView('calls');
@@ -439,7 +669,7 @@
   function hasCrumbs() {
     if (app.view === 'map') return true;
     if (app.view === 'classes') return !!(app.code && app.scope);
-    if (app.view === 'calls') return !!(app.code && app.callFocus);
+    if (app.view === 'calls') return !!(app.code && (app.callFocus || app.impact));
     if (app.view === 'flow') return !!(app.code && app.flowEntry);
     return false;
   }
@@ -458,6 +688,9 @@
         add(ns.name, () => { setScope(scopeNs(ns)); selectCode(ns, 'crumb'); });
         add(`${s.type.n} and its relations`, () => selectCode(s.type, 'crumb'));
       }
+    } else if (app.view === 'calls' && app.code && app.impact) {
+      add('Back to calls', () => stopImpact());
+      add(`Impact of ${app.impact.target.label || app.impact.target.n}`, () => selectCode(app.impact.target, 'crumb'));
     } else if (app.view === 'calls' && app.code && app.callFocus) {
       const f = app.callFocus;
       add(f.type.full, () => selectCode(f.type, 'crumb'));
@@ -600,7 +833,10 @@
       return selectCode(x, 'list');
     }
     if (x.ck === 'type' && app.view === 'calls' && (onChev || x === app.csel)) toggle('T:' + x.id);
-    if (x.ck === 'member' && app.view === 'calls') app.callFocus = x;
+    if (x.ck === 'member' && app.view === 'calls') {
+      if (app.impact) return startImpact(x);
+      app.callFocus = x;
+    }
     if (x.ck === 'member' && app.view === 'flow') {
       if (CG.isMethod(x)) requestFlow(x);
       return;
@@ -673,7 +909,41 @@
           h += `<div class="top" data-id="${f.id}" title="${CG.esc(f.path)}"><span class="dot" style="background:${CG.langColor(f.lang)}"></span><span class="name">${CG.esc(f.name)}</span><span class="num">${CG.short(f, m)}</span></div>`;
       }
     }
+    h += problemsHtml(n);
     body.innerHTML = h;
+  }
+
+  /** Hotspots and code with no use found, in a file, a folder, or the whole solution. */
+  function problemsHtml(n) {
+    if (!app.code) {
+      if (!n.parent && app.codeState !== 'analyzing') return '<div class="heading">Problems</div><div class="btn-row"><button class="btn" data-act="read-code">Find hotspots and unused code</button></div>';
+      return '';
+    }
+    const c = app.code;
+    const inside = (x) => {
+      const f = (x.file || x.f).toLowerCase();
+      if (!n.parent) return true;
+      return n.kids ? f.startsWith(n.path.toLowerCase() + '/') : f === n.path.toLowerCase();
+    };
+    let h = '';
+    const hot = CG.hotspots(c.members.filter(inside), 8);
+    if (hot.length) {
+      h += `<div class="heading">${n.parent ? 'Most complex here' : 'Hotspots'}</div>`;
+      for (const x of hot)
+        h += `<div class="top" data-k="member" data-id="${x.id}" title="${CG.esc(x.label + x.s)} · ${CG.plural(CG.lines(x), 'line')}, nesting ${x.nd || 0}"><span class="cx" style="background:${CG.cxColor(x.cx)}">${x.cx}</span><span class="name">${CG.esc(x.label)}</span><span class="num">${CG.plural(CG.lines(x), 'line')}</span></div>`;
+    }
+    const types = c.unusedTypes.filter(inside), members = c.unusedMembers.filter((x) => inside(x) && !x.type.unused);
+    if (types.length || members.length) {
+      h += `<div class="heading">No use found${n.parent ? ' here' : ''}</div>`;
+      for (const t of types.slice(0, 8))
+        h += `<div class="top" data-k="type" data-id="${t.id}" title="${CG.esc(t.full)}"><span class="dot" style="background:${CG.kindColor(t.k)}"></span><span class="name">${CG.esc(t.n)}</span><span class="num">${t.k}</span></div>`;
+      for (const x of members.slice(0, 12))
+        h += `<div class="top" data-k="member" data-id="${x.id}" title="${CG.esc(x.label + x.s)}"><span class="glyph-col">${CG.ACCESS[x.a] || ''}</span><span class="name">${CG.esc(x.label)}</span><span class="num">${KIND_NAMES[x.k].toLowerCase()}</span></div>`;
+      const rest = types.length + members.length - Math.min(8, types.length) - Math.min(12, members.length);
+      if (rest > 0) h += `<div class="hint">${rest} more</div>`;
+      h += '<div class="hint" style="margin-top:6px">Nothing in the C# calls or reads these. XAML bindings, reflection or other programs may still use them.</div>';
+    }
+    return h;
   }
 
   const KIND_NAMES = { method: 'Method', ctor: 'Constructor', prop: 'Property', field: 'Field', event: 'Event', value: 'Enum value', operator: 'Operator' };
@@ -699,7 +969,13 @@
     // a followed value: every step it passes through, in order
     const tr = app.trace;
     if (tr) {
-      h += `<div class="trace"><div class="heading">Following ${CG.esc(tr.name)}</div>`;
+      h += `<div class="trace"><div class="heading">${CG.esc(tr.title || `Following ${tr.name}`)}</div>`;
+      if (tr.exceptions) {
+        const un = tr.exceptions.uncaught.length;
+        h += un
+          ? `<div class="note" style="color:var(--danger)">${CG.plural(un, 'exception')} not caught in this flow${e.ep === 'event' ? `: ${un === 1 ? 'it reaches' : 'they reach'} the event handler and can crash the app unless a global handler catches ${un === 1 ? 'it' : 'them'}` : ''}.</div>`
+          : tr.exceptions.throws.length ? '<div class="hint">Every exception thrown in this flow is caught in it.</div>' : '';
+      }
       tr.list.forEach((x, i) => {
         const no = x.step.k === 'call' ? x.step.no : '·';
         h += `<div class="top" data-ti="${i}" title="${CG.esc(x.step.f || '')}:${(x.step.l || 0) + 1}"><span class="step-no">${no}</span>` +
@@ -728,6 +1004,13 @@
             const into = o.from.v && o.from.v !== 'return' ? follow(o.from.v, CG.enclosing(o.from) ? CG.enclosing(o.from).no : 1, `Follow ${o.from.v}`) : '';
             h += `<div class="io"><span class="hint">${CG.esc(by)}</span>${into}</div><div class="shape">${CG.shapeHtml(c, o.type.n)}</div>`;
           }
+        }
+      }
+      if (f && f.state === 'ready' && !tr) {
+        const ex = CG.exceptionMap(f.data);
+        if (ex.throws.length) {
+          h += `<div class="heading">Exceptions</div><div class="io"><span class="name">${CG.plural(ex.throws.length, 'throw')}</span>` +
+            `${ex.uncaught.length ? `<span class="hint" style="color:var(--danger)">${ex.uncaught.length} not caught</span>` : '<span class="hint">all caught</span>'}<button class="chip" data-act="exceptions">Show</button></div>`;
         }
       }
       if (!tr) h += '<div class="heading">Reading the flow</div><div class="hint">Calls are numbered in the order they run; each shows what goes in and, after the arrow, where its result goes. Double-click a call to open or close it. Follow a value to see every step it passes through.</div>';
@@ -809,8 +1092,27 @@
     redraw();
   }
 
+  function renderImpactDetails() {
+    const title = $('d-title'), body = $('d-body'), im = app.impact, x = im.target;
+    title.innerHTML = `<span class="title">Impact of ${CG.esc(x.ck === 'type' ? x.n : x.label)}</span>`;
+    let h = `<div class="path">${CG.esc(x.ck === 'type' ? x.full : x.type.full)}</div>`;
+    h += `<div class="stats"><span class="k">Methods reached</span><span class="v">${im.affected.length}</span><span class="k">Classes</span><span class="v">${im.types.size}</span><span class="k">Starting points</span><span class="v">${im.entries.length}</span></div>`;
+    h += '<div class="btn-row"><button class="btn" data-act="back-calls">Back to calls</button></div>';
+    if (im.entries.length) {
+      h += '<div class="heading">Where a change shows up</div>';
+      for (const e of im.entries)
+        h += `<div class="io"><span class="name" title="${CG.esc(e.label)}">${CG.esc(e.ui || e.label)}</span><button class="chip" data-act="flow-from" data-id="${e.id}">Open flow</button></div>`;
+    }
+    if (im.dependents.length) h += rows('Types that depend on it', im.dependents, (t) => t.k, 16);
+    const byDistance = im.affected.slice().sort((p, q) => im.reached.get(p) - im.reached.get(q));
+    h += rows('Methods reached', byDistance, (m) => CG.plural(im.reached.get(m), 'step'), 20, true);
+    if (!im.affected.length) h += '<div class="hint" style="margin-top:8px">Nothing in the C# uses this, so a change stays here.</div>';
+    body.innerHTML = h;
+  }
+
   function renderCodeDetails() {
     if (app.view === 'flow') return renderFlowDetails();
+    if (app.view === 'calls' && app.impact && !app.csel) return renderImpactDetails();
     const title = $('d-title'), body = $('d-body'), c = app.code;
     const x = app.csel || (app.view === 'calls' ? app.callFocus : app.scope && (app.scope.ns || app.scope.type));
     if (!c || !x) { title.textContent = 'Details'; body.innerHTML = ''; return; }
@@ -835,6 +1137,8 @@
       const buttons = ['<button class="btn" data-act="goto">Go to code</button>'];
       if (app.view !== 'classes' || !(app.scope && app.scope.type === x)) buttons.push('<button class="btn" data-act="relations">Relations</button>');
       if (x.m.some(CG.isMethod)) buttons.push('<button class="btn" data-act="calls">Call graph</button>');
+      buttons.push('<button class="btn" data-act="impact">Impact</button>');
+      if (x.unused) h += '<div class="note">No use found: nothing in the C# names, creates or calls this type.</div>';
       h += `<div class="btn-row">${buttons.join('')}</div>`;
       h += rows('Inherits from', base ? [base] : [], () => '');
       h += rows('Implements', x.i.map(get).filter(Boolean), () => '');
@@ -848,13 +1152,21 @@
       h += `<div class="sig">${CG.esc(`${x.a}${x.st ? ' static' : ''}${x.abs ? ' abstract' : ''} ${x.n}${x.s}`)}</div>`;
       h += `<div class="stats"><span class="k">Kind</span><span class="v">${KIND_NAMES[x.k]}</span>`;
       if (CG.isMethod(x)) h += `<span class="k">Called by</span><span class="v">${x.in.size}</span><span class="k">Calls</span><span class="v">${x.out.size}</span>`;
+      if (x.refIn.size) h += `<span class="k">Used by</span><span class="v">${x.refIn.size}</span>`;
+      if (x.cx) h += `<span class="k">Complexity</span><span class="v"><span class="cx" style="background:${CG.cxColor(x.cx)}">${x.cx}</span></span><span class="k">Lines</span><span class="v">${CG.lines(x)}</span><span class="k">Deepest nesting</span><span class="v">${x.nd || 0}</span>`;
       h += '</div>';
+      if (x.unused) h += '<div class="note">No use found: nothing in the C# calls or reads this.</div>';
+      if (x.cx > 10) h += `<div class="hint" style="margin-top:6px">${x.cx} paths run through this ${KIND_NAMES[x.k].toLowerCase()}. Splitting it into smaller methods makes it easier to test and change.</div>`;
       const buttons = ['<button class="btn" data-act="goto">Go to code</button>'];
-      if (CG.isMethod(x) && !(app.view === 'calls' && app.callFocus === x)) buttons.push('<button class="btn" data-act="calls">Call graph</button>');
+      if (CG.isMethod(x) && !(app.view === 'calls' && app.callFocus === x && !app.impact)) buttons.push('<button class="btn" data-act="calls">Call graph</button>');
+      buttons.push('<button class="btn" data-act="impact">Impact</button>');
       h += `<div class="btn-row">${buttons.join('')}</div>`;
       const sites = (map) => (m) => (map.get(m) > 1 ? `×${map.get(m)}` : '');
       h += rows('Called by', [...x.in.keys()].sort((p, q) => p.label.localeCompare(q.label)), sites(x.in), 20, true);
       h += rows('Calls', [...x.out.keys()].sort((p, q) => p.label.localeCompare(q.label)), sites(x.out), 20, true);
+      h += rows('Used by', [...x.refIn.keys()].sort((p, q) => p.label.localeCompare(q.label)), () => '', 20, true);
+      if (x.implements.length) h += rows('Implements', x.implements, () => '', 8, true);
+      if (x.implementedBy.length) h += rows('Implemented by', x.implementedBy, () => '', 8, true);
     }
     body.innerHTML = h;
   }
@@ -882,6 +1194,7 @@
       if (app.view === 'flow') {
         const s = app.fsel;
         if (a === 'stop-trace') stopTrace();
+        if (a === 'exceptions') showExceptions();
         if (a === 'goto-entry') goto(app.flowEntry);
         if (a === 'open-all') setAllOpen(true);
         if (a === 'close-all') setAllOpen(false);
@@ -895,9 +1208,17 @@
         if (a === 'relations') { setScope(scopeType(x)); app.view === 'classes' ? selectCode(x, 'details') : switchView('classes'); }
         if (a === 'ns') { setScope(scopeNs(x)); selectCode(x, 'details'); }
         if (a === 'calls') focusCalls(x.ck === 'type' ? CG.busiest(x.m) : x);
+        if (a === 'impact') startImpact(x);
+        if (a === 'back-calls') stopImpact();
+        if (a === 'flow-from') {
+          const entry = app.code.byId.get(+act.dataset.id);
+          switchView('flow');
+          requestFlow(entry);
+        }
       } else {
         const n = app.selected || app.focus;
         if (a === 'open') openFile(n);
+        if (a === 'read-code') ensureCode(true);
         if (a === 'zoom') zoomTo(n);
         if (a === 'classes') {
           setScope(scopeFiles(n, CG.typesUnder(app.code, n)));
@@ -914,8 +1235,11 @@
     if (traced && app.trace) return selectStep(app.trace.list[+traced.dataset.ti].step, 'details');
     const top = e.target.closest('.top[data-id]');
     if (!top) return;
-    if (top.dataset.k) selectCode(codeOf(top), 'details');
-    else select(app.model.nodes[+top.dataset.id], 'details');
+    if (top.dataset.k) {
+      const x = codeOf(top);
+      if (!isCode()) switchView('classes');
+      selectCode(x, 'details');
+    } else select(app.model.nodes[+top.dataset.id], 'details');
   });
   $('d-body').addEventListener('dblclick', (e) => {
     // a field or type in a result's shape opens its declaration
@@ -1066,6 +1390,34 @@
     save();
     redraw();
   });
+  segmented('colorby', app.colorBy, (v) => {
+    app.colorBy = settings.colorBy = v;
+    save();
+    if (v === 'complexity') ensureCode(true);
+    statusLine();
+    redraw();
+  });
+  $('exc-toggle').addEventListener('click', () => {
+    if (app.trace && app.trace.name === 'exceptions') stopTrace();
+    else showExceptions();
+    layout();
+  });
+  const exportPop = $('export-pop');
+  $('export').addEventListener('click', (e) => {
+    e.stopPropagation();
+    exportPop.hidden = !exportPop.hidden;
+    exportPop.style.right = innerWidth - $('export').getBoundingClientRect().right + 'px';
+    $('export-what').textContent = exportName().replace(/^Codegram /, '');
+    const mermaid = app.view !== 'map' || !!app.model;
+    $('export-mm-copy').disabled = $('export-mm-save').disabled = !mermaid;
+  });
+  exportPop.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-export]');
+    if (b) exportAs(b.dataset.export);
+  });
+  document.addEventListener('pointerdown', (e) => {
+    if (!exportPop.hidden && !exportPop.contains(e.target) && e.target !== $('export')) exportPop.hidden = true;
+  });
   segmented('flowstyle', app.flowStyle, (v) => {
     app.flowStyle = settings.flowStyle = v;
     save();
@@ -1113,6 +1465,8 @@
     document.documentElement.style.setProperty('--glass', settings.alpha);
   });
   alpha.addEventListener('change', save);
+  $('set-follow').checked = settings.follow;
+  $('set-follow').addEventListener('change', () => { settings.follow = $('set-follow').checked; save(); });
 
   // ── keyboard ──
   document.addEventListener('keydown', (e) => {
@@ -1123,6 +1477,8 @@
       $('search').select();
     } else if (e.key === 'Escape') {
       if (!pop.hidden) pop.hidden = true;
+      else if (!exportPop.hidden) exportPop.hidden = true;
+      else if (app.view === 'calls' && app.impact) stopImpact();
       else if ($('search').value) { $('search').value = ''; search(); codeSearch(); renderList(); redraw(); }
       else if (app.view === 'flow' && app.trace) stopTrace();
       else if (app.view === 'flow' && app.fsel) selectStep(null, 'key');

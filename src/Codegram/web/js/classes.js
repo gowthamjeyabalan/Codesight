@@ -81,7 +81,8 @@ CG.ClassView = class {
       w = Math.max(w, ctx.measureText(stereo).width);
     }
     ctx.font = '12px Inter';
-    for (const x of list) w = Math.max(w, ctx.measureText(CG.ClassView.lineText(x)).width + 16);
+    // room for the line's text and its badge (complexity or "unused")
+    for (const x of list) w = Math.max(w, ctx.measureText(CG.ClassView.lineText(x)).width + 16 + (x.unused ? 50 : x.cx >= 6 ? 26 : 0));
     w = Math.min(320, Math.max(150, Math.ceil(w + 28)));
     const headerH = stereo ? 46 : 34;
     const rows = list.length + (more ? 1 : 0);
@@ -315,7 +316,16 @@ CG.ClassView = class {
       ctx.restore();
       ctx.lineWidth = isSel ? 2 : 1;
       ctx.strokeStyle = isSel ? t.accent : hov ? t.text2 : t.cardStroke;
+      // a type with no use found gets a dashed outline and says so
+      if (ty.unused) ctx.setLineDash([5, 4]);
       ctx.stroke();
+      ctx.setLineDash([]);
+      if (ty.unused) {
+        ctx.font = '10.5px Inter';
+        ctx.fillStyle = t.warn;
+        ctx.textAlign = 'right';
+        ctx.fillText('no use found', b.x + b.w - 8, b.y + 16);
+      }
 
       ctx.textAlign = 'center';
       if (b.stereo) {
@@ -344,19 +354,32 @@ CG.ClassView = class {
               ctx.fillRect(b.x + 1, y, b.w - 2, LINE);
             }
             const faded = q && !q.has(x.id) && !q.has(ty.id);
-            ctx.globalAlpha = b.ghost ? 0.45 : faded ? 0.35 : 1;
+            ctx.globalAlpha = b.ghost ? 0.45 : faded ? 0.35 : x.unused ? 0.55 : 1;
+            // on the right: "unused", or the complexity of a method worth a look
+            const badge = x.unused ? 'unused' : x.cx >= 6 ? String(x.cx) : '';
+            ctx.font = '600 10.5px Inter';
+            const badgeW = badge ? ctx.measureText(badge).width + 12 : 0;
+            if (badge) {
+              ctx.beginPath();
+              ctx.roundRect(b.x + b.w - badgeW - 6, y + 3, badgeW, 13, 6.5);
+              ctx.fillStyle = x.unused ? t.labelBg : CG.cxColor(x.cx);
+              ctx.fill();
+              ctx.fillStyle = x.unused ? t.text2 : 'rgba(20,22,28,0.9)';
+              ctx.fillText(badge, b.x + b.w - badgeW, y + 13);
+            }
+            const room = b.w - 34 - (badge ? badgeW + 6 : 0);
             ctx.font = '12px Inter';
             ctx.fillStyle = t.text2;
             ctx.fillText(CG.ACCESS[x.a] || '', b.x + 10, y + 13);
             ctx.font = `${x.abs ? 'italic ' : ''}${x.st ? '500 ' : ''}12px Inter`;
             ctx.fillStyle = t.text;
-            const name = CG.fit(ctx, x.n, b.w - 34);
+            const name = CG.fit(ctx, x.n, room);
             ctx.fillText(name, b.x + 22, y + 13);
             const nameW = ctx.measureText(name).width;
             if (name === x.n && x.s) {
               ctx.font = '12px Inter';
               ctx.fillStyle = t.text2;
-              ctx.fillText(CG.fit(ctx, x.s, b.w - 30 - nameW), b.x + 22 + nameW, y + 13);
+              ctx.fillText(CG.fit(ctx, x.s, room + 4 - nameW), b.x + 22 + nameW, y + 13);
             }
           });
           if (b.more) {

@@ -46,7 +46,9 @@ CG.Camera = class {
 
   /** The world rectangle on screen. */
   visible() {
-    return { x0: -this.x / this.k, y0: -this.y / this.k, x1: (innerWidth - this.x) / this.k, y1: (innerHeight - this.y) / this.k };
+    // an export draws onto a canvas of its own size (CG.viewport)
+    const w = CG.viewport ? CG.viewport.w : innerWidth, h = CG.viewport ? CG.viewport.h : innerHeight;
+    return { x0: -this.x / this.k, y0: -this.y / this.k, x1: (w - this.x) / this.k, y1: (h - this.y) / this.k };
   }
 
   apply(ctx) {

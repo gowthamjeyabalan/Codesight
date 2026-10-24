@@ -40,14 +40,14 @@ CG.sampleFlow = function (code, entry) {
         k: 'try', c: 'try', ...at(m, 1),
         b: [
           { c: 'try', s: [call(named(m, 'Place'), m, 2, { aw: true, on: '_service', a: ['_customer', 'CartItems()'], v: 'order' })] },
-          { c: 'catch InvalidOperationException', s: [call(named(m, 'ShowError'), m, 6)] },
+          { c: 'catch InvalidOperationException', ct: 'InvalidOperationException', s: [call(named(m, 'ShowError'), m, 6)] },
         ],
       }];
     }
     if (m.label === 'OrderService.Place') {
       return [
         call(named(m, 'NotNull'), m, 1),
-        { k: 'if', c: 'products.Count == 0', ...at(m, 2), b: [{ c: 'yes', s: [{ k: 'throw', c: 'new ArgumentException("An order needs products")', ...at(m, 3) }] }, { c: 'no', s: [] }] },
+        { k: 'if', c: 'products.Count == 0', ...at(m, 2), b: [{ c: 'yes', s: [{ k: 'throw', c: 'new ArgumentException("An order needs products")', tt: ['ArgumentException', 'SystemException', 'Exception'], ...at(m, 3) }] }, { c: 'no', s: [] }] },
         call(named(m, 'new Order'), m, 4, { v: 'order' }),
         { k: 'loop', c: 'for each product in products', ...at(m, 5), s: [
           call(named(m, 'Price'), m, 7, { on: 'pricing', v: 'price' }),
@@ -62,7 +62,7 @@ CG.sampleFlow = function (code, entry) {
     }
     if (m.label === 'Order.Cancel') {
       return [
-        { k: 'if', c: 'Status == OrderStatus.Shipped', ...at(m, 1), b: [{ c: 'yes', s: [{ k: 'throw', c: 'new InvalidOperationException("Already shipped")', ...at(m, 2) }] }, { c: 'no', s: [] }] },
+        { k: 'if', c: 'Status == OrderStatus.Shipped', ...at(m, 1), b: [{ c: 'yes', s: [{ k: 'throw', c: 'new InvalidOperationException("Already shipped")', tt: ['InvalidOperationException', 'SystemException', 'Exception'], ...at(m, 2) }] }, { c: 'no', s: [] }] },
         call(named(m, 'new OrderCancelled'), m, 3),
         call(named(m, 'Raise'), m, 4),
       ];

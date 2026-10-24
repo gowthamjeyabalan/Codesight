@@ -32,6 +32,18 @@ function squarify(nodes, values, x, y, w, h, out) {
   }
 }
 
+/** A file's complexity entry from the C# model (its most complex method), or null. */
+CG.fileCx = (n) => (CG.app && CG.app.code && CG.app.code.fileCx.get(n.path.toLowerCase())) || null;
+
+/** A file's colour on the map and tree: its language, or its complexity band (grey without C# methods). */
+CG.fileColor = function (n, t) {
+  if (CG.app && CG.app.colorBy === 'complexity') {
+    const e = CG.fileCx(n);
+    return e ? CG.cxColor(e.max) : t.dark ? '#3a3a40' : '#c8c8cf';
+  }
+  return CG.langColor(n.lang);
+};
+
 /** `text` cut with an ellipsis to fit `max` pixels in the current font. */
 CG.fit = function (ctx, text, max) {
   if (ctx.measureText(text).width <= max) return text;
@@ -121,7 +133,7 @@ CG.MapView = class {
         }
       } else {
         ctx.globalAlpha = q && !q.has(n.id) ? 0.14 : 1;
-        ctx.fillStyle = CG.langColor(n.lang);
+        ctx.fillStyle = CG.fileColor(n, t);
         ctx.beginPath();
         ctx.roundRect(r.x, r.y, r.w, r.h, r.w > 12 && r.h > 12 ? 3 : 0.5);
         ctx.fill();
@@ -132,7 +144,8 @@ CG.MapView = class {
           if (r.h > 34) {
             ctx.font = '11px Inter';
             ctx.fillStyle = t.labelSoft;
-            ctx.fillText(CG.fit(ctx, CG.measure(n, m), r.w - 12), r.x + 6, r.y + 28);
+            const cx = a.colorBy === 'complexity' && CG.fileCx(n);
+            ctx.fillText(CG.fit(ctx, cx ? `complexity ${cx.max}` : CG.measure(n, m), r.w - 12), r.x + 6, r.y + 28);
           }
         }
         ctx.globalAlpha = 1;

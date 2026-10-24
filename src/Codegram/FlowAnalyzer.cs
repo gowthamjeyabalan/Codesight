@@ -38,6 +38,10 @@ namespace Codegram
         [JsonProperty("v", NullValueHandling = NullValueHandling.Ignore)] public string Into;
         /// <summary>What the called method returns, as written in its return statements.</summary>
         [JsonProperty("rv", NullValueHandling = NullValueHandling.Ignore)] public List<string> Returned;
+        /// <summary>For a throw: the exception's type and the types it derives from, nearest first.</summary>
+        [JsonProperty("tt", NullValueHandling = NullValueHandling.Ignore)] public List<string> Thrown;
+        /// <summary>A bare "throw;" in a catch, which throws the caught exception on.</summary>
+        [JsonProperty("rt", DefaultValueHandling = DefaultValueHandling.Ignore)] public bool Rethrow;
     }
 
     sealed class FlowBranch
@@ -46,6 +50,10 @@ namespace Codegram
         /// <summary>The implementation this branch runs, for calls through an interface or a virtual method.</summary>
         [JsonProperty("m", NullValueHandling = NullValueHandling.Ignore)] public int? Member;
         [JsonProperty("s")] public List<FlowStep> Steps = new List<FlowStep>();
+        /// <summary>For a catch: the exception type it catches ("Exception" for a bare catch).</summary>
+        [JsonProperty("ct", NullValueHandling = NullValueHandling.Ignore)] public string Catches;
+        /// <summary>The catch has a when filter, so it may let the exception through.</summary>
+        [JsonProperty("cf", DefaultValueHandling = DefaultValueHandling.Ignore)] public bool Filtered;
     }
 
     /// <summary>
@@ -294,12 +302,19 @@ namespace Codegram
                         foreach (var katch in t.Catches)
                         {
                             var label = katch.Declaration != null ? "catch " + katch.Declaration.Type : "catch";
-                            step.Branches.Add(new FlowBranch { Label = Short(label), Steps = await BranchAsync(katch.Block).ConfigureAwait(false) });
+                            var caught = katch.Declaration != null ? model.GetTypeInfo(katch.Declaration.Type, c.Ct).Type?.Name : null;
+                            step.Branches.Add(new FlowBranch
+                            {
+                                Label = Short(label),
+                                Steps = await BranchAsync(katch.Block).ConfigureAwait(false),
+                                Catches = string.IsNullOrEmpty(caught) ? "Exception" : caught,
+                                Filtered = katch.Filter != null,
+                            });
                         }
                         if (t.Finally != null)
                             step.Branches.Add(new FlowBranch { Label = "finally", Steps = await BranchAsync(t.Finally.Block).ConfigureAwait(false) });
-                        // a try whose catches do nothing worth showing is just its block
-                        if (step.Branches.Skip(1).All(b => b.Steps.Count == 0))
+                        // a try with no catch and an empty finally changes nothing about the flow; a catch always does
+                        if (t.Catches.Count == 0 && step.Branches.Skip(1).All(b => b.Steps.Count == 0))
                             into.AddRange(step.Branches[0].Steps);
                         else
                             AddDecision(into, step);
@@ -340,7 +355,7 @@ namespace Codegram
                         break;
                     case ThrowStatementSyntax th:
                         await ExprAsync(th.Expression, into).ConfigureAwait(false);
-                        into.Add(At(th, "throw", th.Expression != null ? Short(th.Expression) : ""));
+                        into.Add(Throw(th, th.Expression));
                         break;
 
                     case LocalDeclarationStatementSyntax ld:
@@ -357,6 +372,22 @@ namespace Codegram
                         await ChildrenAsync(s, into).ConfigureAwait(false);
                         break;
                 }
+            }
+
+            /// <summary>A throw step with the exception's type chain, so the page can find the catch that stops it.</summary>
+            FlowStep Throw(SyntaxNode node, ExpressionSyntax thrown)
+            {
+                var step = At(node, "throw", thrown != null ? Short(thrown) : "");
+                if (thrown == null)
+                {
+                    step.Rethrow = true;
+                    return step;
+                }
+                var chain = new List<string>();
+                for (var t = model.GetTypeInfo(thrown, c.Ct).Type; t != null && t.SpecialType != SpecialType.System_Object; t = t.BaseType)
+                    chain.Add(t.Name);
+                step.Thrown = chain.Count > 0 ? chain : null;
+                return step;
             }
 
             /// <summary>Decisions where nothing happens on any side are left out.</summary>
@@ -408,6 +439,12 @@ namespace Codegram
                         await CallAsync(ci, into, callbacks).ConfigureAwait(false);
                         return;
                     }
+
+                    case ThrowExpressionSyntax te:
+                        // value ?? throw new X()
+                        await ExprAsync(te.Expression, into).ConfigureAwait(false);
+                        into.Add(Throw(te, te.Expression));
+                        return;
 
                     case AwaitExpressionSyntax aw:
                     {

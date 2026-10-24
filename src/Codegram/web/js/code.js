@@ -45,6 +45,28 @@ CG.buildCode = function (m) {
     for (const i of t.i) byId.get(i)?.implementors.push(t);
     for (const u of t.u) byId.get(u)?.usedBy.push(t);
   }
+  for (const x of members) {
+    x.refIn = new Map(); // member -> uses that are not calls (reads, writes, delegates)
+    x.refOut = new Map();
+    x.implementedBy = [];
+  }
+  for (const x of members) {
+    x.implements = (x.im || []).map((id) => byId.get(id)).filter(Boolean);
+    for (const target of x.implements) target.implementedBy.push(x);
+  }
+  const refs = m.refs || [];
+  for (let k = 0; k + 2 < refs.length; k += 3) {
+    const a = byId.get(refs[k]), b = byId.get(refs[k + 1]);
+    if (!a || !b) continue;
+    a.refOut.set(b, refs[k + 2]);
+    b.refIn.set(a, refs[k + 2]);
+  }
+  for (const t of types) t.namedBy = new Set(); // members that name the type (new, typeof, casts, is)
+  const typeRefs = m.typeRefs || [];
+  for (let k = 0; k + 1 < typeRefs.length; k += 2) {
+    const by = byId.get(typeRefs[k]), t = byId.get(typeRefs[k + 1]);
+    if (by && t && t.ck === 'type') t.namedBy.add(by);
+  }
   let calls = 0;
   for (let k = 0; k + 2 < m.calls.length; k += 3) {
     const a = byId.get(m.calls[k]), b = byId.get(m.calls[k + 1]);
@@ -76,7 +98,10 @@ CG.buildCode = function (m) {
     const plain = t.n.replace(/<.*/, '').split('.').pop();
     if (!byShort.has(plain)) byShort.set(plain, t);
   }
-  return { types, members, byId, namespaces, byFile, byShort, calls, methods: members.filter(CG.isMethod).length, info: m };
+  const code = { types, members, byId, namespaces, byFile, byShort, calls, methods: members.filter(CG.isMethod).length, info: m };
+  CG.markUnused(code);
+  code.fileCx = CG.fileComplexity(code);
+  return code;
 };
 
 /** A stable name for a type, member or namespace, to find it again after the model is read again. */

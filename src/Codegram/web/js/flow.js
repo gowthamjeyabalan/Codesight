@@ -54,6 +54,9 @@ CG.flowLabel = function (s) {
   }
 };
 
+/** The colour of a highlighted step: red for an exception nothing catches, blue otherwise. */
+CG.toneOf = (trace, s, t) => (trace && trace.tones && trace.tones.get(s) === 'danger' ? t.danger : t.accent);
+
 const STOP_TEXT = { seen: 'shown earlier', recursion: 'calls itself', depth: 'too deep', budget: 'stopped' };
 
 CG.FlowView = class {
@@ -385,11 +388,12 @@ class StepsLayout {
     for (const n of this.nodes) {
       const s = n.s, isSel = s === sel, isHov = s === hov;
       const role = trace && trace.roles.get(s);
-      // a followed value: its steps stand out, the rest steps back
+      const tone = CG.toneOf(trace, s, t);
+      // a followed value or the exceptions: their steps stand out, the rest steps back
       ctx.globalAlpha = trace && !role && n.kind !== 'start' ? 0.3 : 1;
-      if (role) this.roleTag(ctx, t, role, n);
+      if (role) this.roleTag(ctx, t, role, n, tone);
       ctx.lineWidth = isSel || role ? 2 : 1;
-      ctx.strokeStyle = isSel || role ? t.accent : t.cardStroke;
+      ctx.strokeStyle = isSel ? t.accent : role ? tone : t.cardStroke;
       if (n.kind === 'decision') {
         hexagon(ctx, n.x, n.y, n.w, n.h);
         ctx.fillStyle = isHov ? t.cardHover : t.card;
@@ -476,13 +480,13 @@ class StepsLayout {
     ctx.globalAlpha = 1;
   }
 
-  /** What a step does with the followed value, to the right of it. */
-  roleTag(ctx, t, role, n) {
+  /** What a step does with the followed value (or its exception), to the right of it. */
+  roleTag(ctx, t, role, n, tone) {
     ctx.font = '600 11px Inter';
     const w = ctx.measureText(role).width + 14;
     ctx.beginPath();
     ctx.roundRect(n.x + n.w + 8, n.y + n.h / 2 - 9, w, 18, 9);
-    ctx.fillStyle = t.accent;
+    ctx.fillStyle = tone || t.accent;
     ctx.fill();
     ctx.fillStyle = '#fff';
     ctx.fillText(role, n.x + n.w + 15, n.y + n.h / 2 + 4);
@@ -764,7 +768,7 @@ class SequenceLayout {
         ctx.stroke();
         CG.arrow(ctx, x + 7, ar.y + 14, Math.PI, 7, false);
         if (ar.label) this.label(ctx, t, ar, x + 40, ar.y + 4, 'left');
-        if (traced) this.roleTag(ctx, t, role, x - 110, ar.y + 7);
+        if (traced) this.roleTag(ctx, t, role, x - 110, ar.y + 7, CG.toneOf(trace, ar.s, t));
         continue;
       }
       const dir = Math.sign(X(ar.to) - X(ar.from));
@@ -778,7 +782,7 @@ class SequenceLayout {
       ctx.setLineDash([]);
       CG.arrow(ctx, x1, ar.y, dir > 0 ? 0 : Math.PI, 8, false);
       if (ar.label) this.label(ctx, t, ar, (x0 + x1) / 2, ar.y - 6, 'center');
-      if (traced && !ar.ret) this.roleTag(ctx, t, role, Math.max(x0, x1) + 14, ar.y);
+      if (traced && !ar.ret) this.roleTag(ctx, t, role, Math.max(x0, x1) + 14, ar.y, CG.toneOf(trace, ar.s, t));
     }
     ctx.globalAlpha = 1;
 
@@ -788,7 +792,10 @@ class SequenceLayout {
       ctx.font = '500 11.5px Inter';
       ctx.fillStyle = n.s.k === 'throw' ? t.danger : t.text2;
       if (n.s === sel) ctx.fillStyle = t.accent;
-      ctx.fillText(CG.fit(ctx, (n.s.k === 'throw' ? '⚠ ' : '↩ ') + n.text, COL * 0.9), x, n.y + 4);
+      const text = CG.fit(ctx, (n.s.k === 'throw' ? '⚠ ' : '↩ ') + n.text, COL * 0.9);
+      ctx.fillText(text, x, n.y + 4);
+      const role = trace && trace.roles.get(n.s);
+      if (role) this.roleTag(ctx, t, role, x + ctx.measureText(text).width + 10, n.y, CG.toneOf(trace, n.s, t));
     }
 
     // fragment tags and conditions last, on a backing, so lifelines and activations do not run through them
@@ -818,6 +825,12 @@ class SequenceLayout {
         ctx.fillStyle = t.text2;
         ctx.fillText(text, x0 + tw + 8, f.y0 + 13);
       }
+      const fragRole = trace && trace.roles.get(f.s);
+      if (fragRole) {
+        ctx.font = '600 11px Inter';
+        this.roleTag(ctx, t, fragRole, x1 - ctx.measureText(fragRole).width - 22, f.y0 + 10, CG.toneOf(trace, f.s, t));
+        ctx.font = '11.5px Inter';
+      }
       for (const sp of f.seps) {
         const text = `[${sp.label}]`;
         ctx.fillStyle = t.card;
@@ -829,13 +842,13 @@ class SequenceLayout {
     void ROW;
   }
 
-  /** What an arrow's step does with the followed value. */
-  roleTag(ctx, t, role, x, y) {
+  /** What an arrow's step does with the followed value (or its exception). */
+  roleTag(ctx, t, role, x, y, tone) {
     ctx.font = '600 11px Inter';
     const w = ctx.measureText(role).width + 14;
     ctx.beginPath();
     ctx.roundRect(x, y - 9, w, 18, 9);
-    ctx.fillStyle = t.accent;
+    ctx.fillStyle = tone || t.accent;
     ctx.fill();
     ctx.fillStyle = '#fff';
     ctx.fillText(role, x + 7, y + 4);

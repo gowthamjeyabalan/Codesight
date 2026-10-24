@@ -42,6 +42,9 @@ namespace Codegram
         Solution analyzedSolution;
         Dictionary<int, string> analyzedDocIds;
         Dictionary<string, int> analyzedIds;
+        /// <summary>Reports the editor's caret to the page, so the views can follow what is being read.</summary>
+        readonly System.Windows.Threading.DispatcherTimer caretTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
+        string lastCaret;
         /// <summary>The folder being mapped, without a trailing separator; null when nothing is open.</summary>
         string root;
         CancellationTokenSource scan;
@@ -121,6 +124,9 @@ namespace Codegram
             {
                 case "ready":
                     pageReady = true;
+                    caretTimer.Tick -= OnCaretTick;
+                    caretTimer.Tick += OnCaretTick;
+                    caretTimer.Start();
                     PostTheme();
                     _ = package.JoinableTaskFactory.RunAsync(RefreshRootAsync);
                     break;
@@ -139,6 +145,17 @@ namespace Codegram
                     break;
                 case "flow":
                     StartFlow((int?)message["id"] ?? -1);
+                    break;
+                case "save":
+                    Save((string)message["name"], (string)message["filter"], (string)message["text"], (string)message["base64"]);
+                    break;
+                case "copy":
+                    try
+                    {
+                        System.Windows.Clipboard.SetText((string)message["text"] ?? "");
+                        Post(new { type = "copied" });
+                    }
+                    catch (System.Runtime.InteropServices.ExternalException) { Post(new { type = "copied", error = "The clipboard is busy. Try again." }); }
                     break;
             }
         }
@@ -213,12 +230,61 @@ namespace Codegram
                     projects = model.Projects,
                     types = model.Types,
                     calls = model.Calls,
+                    refs = model.Refs,
+                    typeRefs = model.TypeRefs,
                     truncated = model.Truncated,
                     maxTypes = CodeAnalyzer.MaxTypes,
                     seconds = model.Seconds,
                     error,
                 });
             });
+        }
+
+        /// <summary>Asks where to save an exported diagram and writes it: text (SVG, Mermaid) or base64 (PNG).</summary>
+        void Save(string name, string filter, string text, string base64)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var dialog = new Microsoft.Win32.SaveFileDialog { FileName = name ?? "Codegram", Filter = filter ?? "All files|*.*", AddExtension = true, OverwritePrompt = true };
+            if (dialog.ShowDialog(System.Windows.Window.GetWindow(this)) != true)
+                return;
+            try
+            {
+                if (base64 != null)
+                    File.WriteAllBytes(dialog.FileName, Convert.FromBase64String(base64));
+                else
+                    File.WriteAllText(dialog.FileName, text ?? "", new System.Text.UTF8Encoding(false));
+                Post(new { type = "saved", path = dialog.FileName });
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is FormatException)
+            {
+                Post(new { type = "saved", error = ex.Message });
+            }
+        }
+
+        /// <summary>Sends the file and line of the editor's caret when it moves (zero-based line).</summary>
+        void OnCaretTick(object sender, EventArgs e)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            if (disposed || !pageReady || root == null || !IsVisible)
+                return;
+            try
+            {
+                var dte = Package.GetGlobalService(typeof(EnvDTE.DTE)) as EnvDTE.DTE;
+                var doc = dte?.ActiveDocument;
+                if (doc == null || !(doc.Selection is EnvDTE.TextSelection selection))
+                    return;
+                var path = doc.FullName;
+                int line = selection.ActivePoint.Line - 1;
+                var key = path + "|" + line;
+                if (key == lastCaret)
+                    return;
+                lastCaret = key;
+                Post(new { type = "caret", path = CodeAnalyzer.Relative(root, path), line });
+            }
+            catch (Exception ex) when (ex is System.Runtime.InteropServices.COMException || ex is ArgumentException || ex is InvalidOperationException)
+            {
+                // a document closing under us: try again next tick
+            }
         }
 
         /// <summary>Follows what runs from the member <paramref name="id"/> of the last code model, on a background thread.</summary>
@@ -408,6 +474,7 @@ namespace Codegram
             SolutionEvents.OnAfterCloseSolution -= OnSolutionClosed;
             SolutionEvents.OnAfterOpenFolder -= OnFolderChanged;
             SolutionEvents.OnAfterCloseFolder -= OnFolderChanged;
+            caretTimer.Stop();
             scan?.Cancel();
             analysis?.Cancel();
             flow?.Cancel();

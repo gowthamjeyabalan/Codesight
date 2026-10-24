@@ -30,13 +30,14 @@ CG.CallView = class {
 
   layout(ctx) {
     const a = this.app, f = a.callFocus, { COL, ROW, MAX_PER_LEVEL } = CG.CallView;
-    const key = [a.codeVersion, f && f.id, a.depth].join('|');
+    const key = [a.codeVersion, f && f.id, a.depth, a.impact && a.impact.target.id].join('|');
     if (key === this.key) return;
     this.key = key;
     this.fitPending = true;
     this.items = [];
     this.edges = [];
     this.byMember.clear();
+    if (a.impact) return this.layoutImpact(ctx, a.impact);
     if (!f) return;
 
     // walk out from the focus both ways, one column per step
@@ -103,6 +104,48 @@ CG.CallView = class {
     }
   }
 
+  /**
+   * Impact: the changed member (or a type's members) on the right, and to the left, one column per step, every
+   * member that calls or uses it, up to where flows start. Starting points are labelled with their control.
+   */
+  layoutImpact(ctx, impact) {
+    const { COL, ROW, MAX_PER_LEVEL } = CG.CallView;
+    const columns = new Map();
+    for (const [m, d] of impact.reached) {
+      if (!columns.has(-d)) columns.set(-d, []);
+      columns.get(-d).push(m);
+    }
+    const more = new Map();
+    for (const [lv, col] of columns) {
+      col.sort((p, q) => (q.ep ? 1 : 0) - (p.ep ? 1 : 0) || p.label.localeCompare(q.label));
+      if (col.length > MAX_PER_LEVEL) {
+        more.set(lv, col.length - MAX_PER_LEVEL);
+        col.length = MAX_PER_LEVEL;
+      }
+    }
+    for (const [lv, col] of columns) {
+      const count = col.length + (more.has(lv) ? 1 : 0);
+      col.forEach((m, i) => {
+        const w = this.width(ctx, m, lv === 0);
+        const it = { member: m, level: lv, w, x: lv * COL - w / 2, y: (i - (count - 1) / 2) * ROW, entry: !!m.ep };
+        this.items.push(it);
+        this.byMember.set(m, it);
+      });
+      if (more.has(lv)) this.items.push({ more: more.get(lv), level: lv, w: 110, x: lv * COL - 55, y: (count - 1 - (count - 1) / 2) * ROW });
+    }
+    this.levels = columns;
+    // an edge from each member to what it calls, uses, or reaches through an interface, when both are shown
+    for (const it of this.items) {
+      if (it.more) continue;
+      const m = it.member, targets = new Set([...m.out.keys(), ...m.refOut.keys()]);
+      for (const t of [...targets]) for (const impl of t.implementedBy) targets.add(impl);
+      for (const t of targets) {
+        const to = this.byMember.get(t);
+        if (to && to.level > it.level) this.edges.push({ from: it, to, count: m.out.get(t) || 1 });
+      }
+    }
+  }
+
   bounds() {
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
     for (const it of this.items) {
@@ -129,8 +172,9 @@ CG.CallView = class {
   draw(ctx, t) {
     this.layout(ctx);
     if (this.fitPending) { this.fit(ctx); this.fitPending = false; }
-    const a = this.app, f = a.callFocus, q = a.codeMatches, H = CG.CallView.H, r = a.region;
-    if (!f) {
+    const a = this.app, q = a.codeMatches, H = CG.CallView.H, r = a.region;
+    const impact = a.impact, f = impact ? null : a.callFocus;
+    if (!f && !impact) {
       ctx.fillStyle = t.text2;
       ctx.font = '13px Inter';
       ctx.textAlign = 'center';
@@ -148,8 +192,12 @@ CG.CallView = class {
     ctx.fillStyle = t.text2;
     ctx.textAlign = 'center';
     for (const lv of this.levels.keys()) {
-      if (!lv) continue;
       const steps = Math.abs(lv);
+      if (impact) {
+        ctx.fillText(lv === 0 ? 'If this changes' : `Affected · ${CG.plural(steps, 'step')} away`, lv * CG.CallView.COL, top);
+        continue;
+      }
+      if (!lv) continue;
       const label = (lv < 0 ? 'Called by' : 'Calls') + (steps > 1 ? ` · ${steps} steps` : '');
       ctx.fillText(label, lv * CG.CallView.COL, top);
     }
@@ -197,7 +245,7 @@ CG.CallView = class {
         }
         continue;
       }
-      const m = it.member, isFocus = m === f, isSel = m === sel, hov = m === a.hover;
+      const m = it.member, isFocus = impact ? it.level === 0 : m === f, isSel = m === sel, hov = m === a.hover;
       ctx.globalAlpha = q && !q.has(m.id) ? 0.3 : 1;
       ctx.beginPath();
       ctx.roundRect(it.x, top, it.w, H, 8);
@@ -220,14 +268,26 @@ CG.CallView = class {
         ctx.fillStyle = t.text;
         ctx.fillText(CG.fit(ctx, m.k === 'ctor' ? 'new' : m.n, 170), it.x + 23 + tw, it.y + 4);
       }
+      // where a flow starts: name the control or kind, so the reach of a change reads as "this button"
+      if (impact && it.entry && text) {
+        const label = m.ui || { event: 'event', command: 'command', action: 'web API', main: 'program start', test: 'test' }[m.ep] || 'start';
+        ctx.font = '600 11px Inter';
+        const w = Math.min(220, ctx.measureText(label).width + 14);
+        ctx.beginPath();
+        ctx.roundRect(it.x - w - 8, it.y - 9, w, 18, 9);
+        ctx.fillStyle = t.accent;
+        ctx.fill();
+        ctx.fillStyle = '#fff';
+        ctx.fillText(CG.fit(ctx, label, w - 14), it.x - w + 1, it.y + 4);
+      }
       ctx.globalAlpha = 1;
     }
 
-    if (this.items.length === 1) {
+    if (this.items.length === (impact ? impact.start.length : 1)) {
       ctx.font = '12px Inter';
       ctx.fillStyle = t.text2;
       ctx.textAlign = 'center';
-      ctx.fillText("Nothing in the solution's code calls this or is called by it.", 0, 40);
+      ctx.fillText(impact ? "Nothing in the solution's code uses this, so a change reaches nothing else." : "Nothing in the solution's code calls this or is called by it.", 0, 40);
       ctx.textAlign = 'left';
     }
     ctx.restore();
