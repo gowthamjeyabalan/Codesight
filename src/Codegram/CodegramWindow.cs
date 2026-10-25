@@ -26,6 +26,7 @@ namespace Codegram
 
         protected override void Dispose(bool disposing)
         {
+            ThreadHelper.ThrowIfNotOnUIThread();
             if (disposing)
                 view?.Dispose();
             base.Dispose(disposing);

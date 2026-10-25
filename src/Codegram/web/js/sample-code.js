@@ -108,12 +108,20 @@ CG.sampleCode = function () {
   call('CsvExporter.Export', 'CsvExporter.Escape', 3);
 
   // made-up reads of properties and fields: each type's methods use its own data, a few are left with no use
-  const refs = [], unread = new Set(['Product.Sku', 'Customer.Email', 'OrderLine.UnitPrice']);
+  // the constructor writes them, the first method reads them
+  const refs = [], writes = [], unread = new Set(['Product.Sku', 'Customer.Email', 'OrderLine.UnitPrice']);
   for (const t of types) {
-    const reader = t.m.find((x) => x.k === 'method' || x.k === 'ctor');
-    if (!reader) continue;
-    for (const x of t.m) if ((x.k === 'prop' || x.k === 'field') && !unread.has(`${t.n.replace(/<.*/, '')}.${x.n}`)) refs.push(reader.id, x.id, 1);
+    const ctor = t.m.find((x) => x.k === 'ctor'), reader = t.m.find((x) => x.k === 'method');
+    for (const x of t.m) {
+      if ((x.k !== 'prop' && x.k !== 'field') || unread.has(`${t.n.replace(/<.*/, '')}.${x.n}`)) continue;
+      if (ctor) { refs.push(ctor.id, x.id, 1); writes.push(ctor.id, x.id, 1); }
+      if (reader) refs.push(reader.id, x.id, 2);
+    }
   }
+  // the order's total is also written as lines change
+  const recalc = members.get('Order.Recalculate'), total = members.get('Order.Total');
+  refs.push(recalc.id, total.id, 1);
+  writes.push(recalc.id, total.id, 1);
   // interface implementations, as CodeAnalyzer.cs links them
   for (const t of types)
     for (const iid of t.i || []) {
@@ -125,5 +133,6 @@ CG.sampleCode = function () {
     }
   for (const n of ['Entity.Equals', 'Entity.GetHashCode']) members.get(n).ov = true;
 
-  return { type: 'code', projects: ['Contoso.Api', 'Contoso.Core'], types, calls, refs, truncated: false, maxTypes: 20000, seconds: 0.42 };
+  const projectRefs = [['Contoso.Api', 'Contoso.Core'], ['Contoso.Desktop', 'Contoso.Api'], ['Contoso.Desktop', 'Contoso.Core']];
+  return { type: 'code', projects: ['Contoso.Api', 'Contoso.Core', 'Contoso.Desktop'], types, calls, refs, writes, projectRefs, truncated: false, maxTypes: 20000, seconds: 0.42 };
 };

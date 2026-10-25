@@ -23,6 +23,11 @@
       <button data-v="classes">Classes</button>
       <button data-v="calls">Calls</button>
       <button data-v="flow">Flow</button>
+      <button data-v="structure">Structure</button>
+    </div>
+    <div class="segmented" id="structmode" title="Map projects or namespaces">
+      <button data-v="projects">Projects</button>
+      <button data-v="namespaces">Namespaces</button>
     </div>
     <div class="segmented" id="flowstyle" title="How to draw the flow">
       <button data-v="sequence">Sequence</button>
@@ -53,6 +58,7 @@
     </div>
     <input id="search" class="field" placeholder="Find files" spellcheck="false" autocomplete="off">
     <div class="grow"></div>
+    <button class="btn live-pill" id="live-pill" hidden title="The debugger's last pause: show it in the flow"></button>
     <button class="btn toggle" id="toggle-files">Files</button>
     <button class="btn toggle" id="toggle-details">Details</button>
     <button class="btn" id="fit">Fit</button>
@@ -124,6 +130,8 @@
   <script src="js/classes.js"></script>
   <script src="js/calls.js"></script>
   <script src="js/dataflow.js"></script>
+  <script src="js/debug.js"></script>
+  <script src="js/structure.js"></script>
   <script src="js/flow.js"></script>
   <script src="js/sample-flow.js"></script>
   <script src="js/export.js"></script>

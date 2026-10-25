@@ -85,6 +85,10 @@ namespace Codegram
         public List<int> Refs = new List<int>();
         /// <summary>Types named in code (new, typeof, casts, is, generic arguments) as pairs: member id, type id.</summary>
         public List<int> TypeRefs = new List<int>();
+        /// <summary>The uses in Refs that write (assign, ++, out or ref), as flat triples like Refs.</summary>
+        public List<int> Writes = new List<int>();
+        /// <summary>Project references between the solution's C# projects, as pairs of names: from, to.</summary>
+        public List<string[]> ProjectRefs = new List<string[]>();
         public bool Truncated;
         public double Seconds;
         /// <summary>Documentation id of every member to its id, to find a member's symbol again for its flow.</summary>
@@ -112,6 +116,7 @@ namespace Codegram
             public readonly Dictionary<long, int> Calls = new Dictionary<long, int>();
             public readonly Dictionary<long, int> Refs = new Dictionary<long, int>();
             public readonly HashSet<long> TypeRefs = new HashSet<long>();
+            public readonly Dictionary<long, int> Writes = new Dictionary<long, int>();
             public readonly List<(ISymbol symbol, CodeMember member)> MemberSymbols = new List<(ISymbol, CodeMember)>();
             public readonly Dictionary<int, CodeMember> Members = new Dictionary<int, CodeMember>();
             /// <summary>Event handlers by "Namespace.Type.Method", to label them with the control from XAML.</summary>
@@ -137,6 +142,16 @@ namespace Codegram
                 if (compilation == null)
                     continue;
                 c.Model.Projects.Add(StripFramework(project.Name));
+                foreach (var reference in project.ProjectReferences)
+                {
+                    var target = solution.GetProject(reference.ProjectId);
+                    if (target != null && target.Language == LanguageNames.CSharp)
+                    {
+                        var pair = new[] { StripFramework(project.Name), StripFramework(target.Name) };
+                        if (!c.Model.ProjectRefs.Any(r => r[0] == pair[0] && r[1] == pair[1]))
+                            c.Model.ProjectRefs.Add(pair);
+                    }
+                }
                 compilations.Add(compilation);
                 if (project.FilePath != null)
                     projectDirs.Add(Path.GetDirectoryName(project.FilePath));
@@ -164,6 +179,12 @@ namespace Codegram
                 c.Model.Calls.Add((int)(pair.Key >> 32));
                 c.Model.Calls.Add((int)(pair.Key & 0xffffffff));
                 c.Model.Calls.Add(pair.Value);
+            }
+            foreach (var pair in c.Writes)
+            {
+                c.Model.Writes.Add((int)(pair.Key >> 32));
+                c.Model.Writes.Add((int)(pair.Key & 0xffffffff));
+                c.Model.Writes.Add(pair.Value);
             }
             foreach (var pair in c.TypeRefs)
             {
@@ -435,6 +456,29 @@ namespace Codegram
                 return;
             long key = ((long)from.Value << 32) | (uint)to.Value;
             c.Refs[key] = c.Refs.TryGetValue(key, out var n) ? n + 1 : 1;
+            if (!(symbol is IMethodSymbol) && IsWritten(name))
+                c.Writes[key] = c.Writes.TryGetValue(key, out var w) ? w + 1 : 1;
+        }
+
+        /// <summary>True when the name is assigned to (=, +=, ++, --, an out or ref argument, an object initializer).</summary>
+        static bool IsWritten(IdentifierNameSyntax name)
+        {
+            ExpressionSyntax e = name.Parent is MemberAccessExpressionSyntax ma && ma.Name == name ? ma
+                : name.Parent is MemberBindingExpressionSyntax mb && mb.Name == name ? (ExpressionSyntax)mb
+                : name;
+            switch (e.Parent)
+            {
+                case AssignmentExpressionSyntax a:
+                    return a.Left == e;
+                case PrefixUnaryExpressionSyntax pre:
+                    return pre.IsKind(SyntaxKind.PreIncrementExpression) || pre.IsKind(SyntaxKind.PreDecrementExpression);
+                case PostfixUnaryExpressionSyntax post:
+                    return post.IsKind(SyntaxKind.PostIncrementExpression) || post.IsKind(SyntaxKind.PostDecrementExpression);
+                case ArgumentSyntax arg:
+                    return arg.RefKindKeyword.IsKind(SyntaxKind.OutKeyword) || arg.RefKindKeyword.IsKind(SyntaxKind.RefKeyword);
+                default:
+                    return false;
+            }
         }
 
         /// <summary>The overridden member and the interface members this member implements; Overrides is set even when they are outside the solution.</summary>

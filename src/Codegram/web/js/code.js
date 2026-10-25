@@ -61,6 +61,17 @@ CG.buildCode = function (m) {
     a.refOut.set(b, refs[k + 2]);
     b.refIn.set(a, refs[k + 2]);
   }
+  for (const x of members) {
+    x.writeIn = new Map(); // member -> writes (assignments, ++, out and ref) among its uses
+    x.writeOut = new Map();
+  }
+  const writes = m.writes || [];
+  for (let k = 0; k + 2 < writes.length; k += 3) {
+    const a = byId.get(writes[k]), b = byId.get(writes[k + 1]);
+    if (!a || !b) continue;
+    a.writeOut.set(b, writes[k + 2]);
+    b.writeIn.set(a, writes[k + 2]);
+  }
   for (const t of types) t.namedBy = new Set(); // members that name the type (new, typeof, casts, is)
   const typeRefs = m.typeRefs || [];
   for (let k = 0; k + 1 < typeRefs.length; k += 2) {
@@ -98,7 +109,7 @@ CG.buildCode = function (m) {
     const plain = t.n.replace(/<.*/, '').split('.').pop();
     if (!byShort.has(plain)) byShort.set(plain, t);
   }
-  const code = { types, members, byId, namespaces, byFile, byShort, calls, methods: members.filter(CG.isMethod).length, info: m };
+  const code = { types, members, byId, namespaces, byFile, byShort, calls, methods: members.filter(CG.isMethod).length, info: m, projectRefs: m.projectRefs || [] };
   CG.markUnused(code);
   code.fileCx = CG.fileComplexity(code);
   return code;
@@ -118,6 +129,16 @@ CG.findCode = function (code, key) {
   if (kind === 'N') return code.namespaces.find((n) => n.key === rest) || null;
   if (kind === 'T') return code.types.find((t) => t.full === rest) || null;
   return code.members.find((x) => `${x.type.full}.${x.n}${x.s}` === rest) || null;
+};
+
+/** The innermost member declared around a line of a file (path relative to the root, "/" or "\"). */
+CG.memberAt = function (code, path, line) {
+  if (!code || !path) return null;
+  const p = path.replace(/\\/g, '/').toLowerCase();
+  let best = null;
+  for (const x of code.members)
+    if (x.file.toLowerCase() === p && x.l <= line && line <= x.le && (!best || x.le - x.l < best.le - best.l)) best = x;
+  return best;
 };
 
 /** Types declared in a file or anywhere below a folder of the map. */

@@ -353,6 +353,11 @@ CG.ClassView = class {
               ctx.fillStyle = x === a.csel ? t.accentSoft : t.hoverSoft;
               ctx.fillRect(b.x + 1, y, b.w - 2, LINE);
             }
+            // on the paused call stack: an accent bar at the left edge
+            if (a.liveSet && a.liveSet.has(x)) {
+              ctx.fillStyle = t.accent;
+              ctx.fillRect(b.x + 1, y + 2, 3, LINE - 4);
+            }
             const faded = q && !q.has(x.id) && !q.has(ty.id);
             ctx.globalAlpha = b.ghost ? 0.45 : faded ? 0.35 : x.unused ? 0.55 : 1;
             // on the right: "unused", or the complexity of a method worth a look

@@ -9,7 +9,7 @@
   const LIST_MAX = 300;
 
   // ── settings (per viewer, kept in the WebView profile) ──
-  const defaults = { theme: 'vs', material: 'acrylic', alpha: 0.8, view: 'map', metric: 'lines', colorBy: 'language', follow: true, members: 'all', depth: 2, flowStyle: 'sequence', files: true, details: true };
+  const defaults = { theme: 'vs', material: 'acrylic', alpha: 0.8, view: 'map', metric: 'lines', colorBy: 'language', follow: true, members: 'all', depth: 2, flowStyle: 'sequence', structMode: 'projects', files: true, details: true };
   let settings = { ...defaults };
   try { Object.assign(settings, JSON.parse(localStorage.getItem('codesight.settings') || '{}')); } catch { /* private or blocked storage */ }
   // the demo page (no Visual Studio) can open on a view and style: index.html?view=flow&flowStyle=steps&theme=light
@@ -28,14 +28,16 @@
     flowEntry: null, flow: null, fsel: null, flowVersion: 0, flowLoads: 0, flowStyle: settings.flowStyle, trace: null,
     // problems: file colours, and the reach of a change shown in the Calls view
     colorBy: settings.colorBy, impact: null,
+    // where something is used (a mode of the Calls view), the structure map, and the debugger's last pause
+    uses: null, structMode: settings.structMode, ssel: null, structure: null, debug: null, liveSet: null,
     // shared
     hover: null, metric: settings.metric, view: settings.view, membersMode: settings.members, depth: +settings.depth,
     region: { x: 0, y: 0, w: 0, h: 0 }, t: null, emptyMsg: null,
   });
-  const views = { map: new CG.MapView(app), tree: new CG.TreeView(app), classes: new CG.ClassView(app), calls: new CG.CallView(app), flow: new CG.FlowView(app) };
+  const views = { map: new CG.MapView(app), tree: new CG.TreeView(app), classes: new CG.ClassView(app), calls: new CG.CallView(app), flow: new CG.FlowView(app), structure: new CG.StructureView(app) };
   if (!views[app.view]) app.view = 'map';
   const view = () => views[app.view];
-  const isCode = () => app.view === 'classes' || app.view === 'calls' || app.view === 'flow';
+  const isCode = () => app.view === 'classes' || app.view === 'calls' || app.view === 'flow' || app.view === 'structure';
   const canPan = () => app.view !== 'map';
   const listOpen = new Set(); // folder paths open in the Files panel
   const codeOpen = new Set(); // namespaces and types open in the Types panel
@@ -80,6 +82,9 @@
     $('depth-group').hidden = app.view !== 'calls';
     $('flowstyle').hidden = app.view !== 'flow';
     $('exc-toggle').hidden = app.view !== 'flow';
+    $('structmode').hidden = app.view !== 'structure';
+    if (app.uses) $('depth-group').hidden = true;
+    renderLivePill();
     $('exc-toggle').classList.toggle('on', !!(app.trace && app.trace.name === 'exceptions'));
     $('colorby').hidden = app.view !== 'map' && app.view !== 'tree';
     if (app.impact) $('depth-group').hidden = true;
@@ -150,6 +155,17 @@
         if (f.data.stopped) fs += ` · <span class="warn">Stopped after ${f.budget} calls.</span>`;
         return setStatus(fs + ' · double-click a call to open or close it');
       }
+      if (app.view === 'structure' && app.structure) {
+        const st = app.structure, projects = st.mode === 'projects';
+        let ss = `${CG.plural(st.nodes.length, projects ? 'project' : 'namespace')}, ${CG.plural(st.edges.length, 'dependency', 'dependencies')}`;
+        if (st.unused.length) ss += `, ${CG.plural(st.unused.length, 'unused reference')}`;
+        if (st.cycles.length) ss += ` · <span class="warn">${CG.plural(st.cycles.length, 'dependency cycle')}</span>`;
+        return setStatus(ss + ' · arrows point to what is used');
+      }
+      if (app.view === 'calls' && app.uses) {
+        const u = app.uses;
+        return setStatus(`Where ${CG.esc(u.target.label || u.target.n)} is used · ${u.leftTitle.toLowerCase()}: ${u.left.length} · ${u.rightTitle.toLowerCase()}: ${u.right.length}`);
+      }
       if (app.view === 'calls' && app.impact) {
         const im = app.impact;
         return setStatus(`Changing ${CG.esc(im.target.label || im.target.n)} reaches ${CG.plural(im.affected.length, 'method')} in ${CG.plural(im.types.size, 'class', 'classes')}, from ${CG.plural(im.entries.length, 'starting point')}`);
@@ -211,6 +227,15 @@
         break;
       case 'saved':
         setStatus(m.error ? `<span class="warn">Could not save: ${CG.esc(m.error)}</span>` : `Saved to ${CG.esc(m.path)}`);
+        break;
+      case 'debug':
+        onDebug(m);
+        break;
+      case 'debug-children':
+        if (app.debug) {
+          app.debug.children.set(m.key, m.error ? { error: m.error } : { items: m.items });
+          renderDetails();
+        }
         break;
       case 'copied':
         setStatus(m.error ? `<span class="warn">${CG.esc(m.error)}</span>` : 'Copied as Mermaid. Paste it into Markdown, GitHub or any Mermaid viewer.');
@@ -274,6 +299,15 @@
       const target = CG.findCode(app.code, CG.codeKey(app.impact.target));
       app.impact = target ? CG.impactOf(target) : null;
     }
+    if (app.uses) {
+      const target = CG.findCode(app.code, CG.codeKey(app.uses.target));
+      app.uses = target ? CG.usesOf(app.code, target) : null;
+    }
+    app.ssel = null;
+    if (app.debug) {
+      CG.matchFrames(app.code, app.debug.frames);
+      app.liveSet = app.debug.state === 'break' ? CG.liveMembers(app.debug.frames) : null;
+    }
     const entryKey = app.flowEntry && CG.codeKey(app.flowEntry);
     app.flowEntry = CG.findCode(app.code, entryKey);
     app.flow = null;
@@ -281,6 +315,8 @@
     codeSearch();
     renderAll();
     ensureFlow();
+    // the demo page can start paused, to show the debugger snapshot: index.html?view=flow&pause=1
+    if (!host && !app.debug && new URLSearchParams(location.search).has('pause')) setTimeout(() => onHost(CG.sampleDebug(app.code)), 400);
   }
 
   // ── flows ──
@@ -323,6 +359,7 @@
     app.flowLoads++;
     app.fsel = null;
     app.trace = null;
+    applyLive();
     renderAll();
   }
 
@@ -462,12 +499,164 @@
     }
   }
 
+  // ── where is this used ──
+  function startUses(x) {
+    if (!x || (x.ck !== 'member' && x.ck !== 'type') || !app.code) return;
+    app.uses = CG.usesOf(app.code, x);
+    app.impact = null;
+    app.csel = null;
+    if (app.view !== 'calls') switchView('calls');
+    else renderAll();
+  }
+
+  function stopUses() {
+    const target = app.uses && app.uses.target;
+    app.uses = null;
+    if (target && target.ck === 'member' && CG.isMethod(target)) app.callFocus = target;
+    renderAll();
+  }
+
+  // ── debugger snapshot ──
+  function onDebug(m) {
+    if (m.state === 'break') {
+      app.debug = { state: 'break', id: m.id, reason: m.reason, thread: m.thread, error: m.error, frames: m.frames || [], children: new Map(), open: new Set() };
+      if (app.code) CG.matchFrames(app.code, app.debug.frames);
+      app.liveSet = CG.liveMembers(app.debug.frames);
+    } else if (app.debug) {
+      // running again or stopped: keep the last pause, greyed, without live markers
+      app.debug.state = m.state;
+      app.liveSet = null;
+    }
+    if (app.trace && app.trace.name === 'live') app.trace = null;
+    applyLive();
+    renderAll();
+  }
+
+  /** Shows the pause in the open flow, when the flow's starting method is on the paused stack. */
+  function applyLive() {
+    const d = app.debug, f = app.flow;
+    if (!d || !f || f.state !== 'ready' || !app.code) return;
+    if (app.trace && app.trace.name !== 'live') return; // a followed value or the exceptions stay on top
+    const live = CG.liveInFlow(f.data, d.frames);
+    if (!live) {
+      if (app.trace && app.trace.name === 'live') app.trace = null;
+      return;
+    }
+    const list = [];
+    const visit = (s) => {
+      if (live.roles.has(s)) list.push({ step: s, role: live.roles.get(s) });
+      (s.s || []).forEach(visit);
+      (s.b || []).forEach((b) => b.s.forEach(visit));
+    };
+    visit(f.data.root);
+    const where = live.last.member ? live.last.member.label : live.last.fn;
+    app.trace = { name: 'live', title: d.state === 'break' ? `Paused in ${where}` : `Last pause: ${where}`, roles: live.roles, tones: new Map(), list, live };
+    app.flowVersion++;
+  }
+
+  function renderLivePill() {
+    const pill = $('live-pill'), d = app.debug;
+    pill.hidden = !d || !app.code;
+    if (pill.hidden) return;
+    const inner = d.frames.find((f) => f.member) || d.frames[0];
+    const where = inner ? (inner.member ? inner.member.label : inner.fn) : 'the debugger';
+    pill.textContent = d.state === 'break' ? `Paused in ${where}` : `Last pause: ${where}`;
+    pill.classList.toggle('on', d.state === 'break');
+  }
+
+  /** Opens the pause in the Flow view: in the open flow when it holds the pause, or the flow that starts it. */
+  function showPause() {
+    const d = app.debug;
+    if (!d || !app.code) return;
+    const f = app.flow;
+    if (app.view !== 'flow') switchView('flow');
+    if (f && f.state === 'ready' && CG.liveInFlow(f.data, d.frames)) {
+      if (app.trace && app.trace.name !== 'live') app.trace = null;
+      applyLive();
+      if (app.trace && app.trace.live && app.trace.live.here) selectStep(app.trace.live.here, 'details');
+      renderAll();
+      return;
+    }
+    const entry = CG.pauseEntry(d.frames);
+    if (entry) requestFlow(entry);
+    else setStatus('<span class="warn">The pause is not in the code of this solution.</span>');
+  }
+
+  /** Arguments and locals of a frame from the pause, with members opened on request. */
+  function valuesHtml(frame) {
+    const d = app.debug;
+    if (!d || !frame || (!frame.args && !frame.locals)) return '';
+    const live = d.state === 'break';
+    const rows = (items, scope, path) => (items || []).map((it) => {
+      const p = [...path, it.n], key = `${frame.index}|${scope}|${p.join('\u001f')}`;
+      const open = d.open.has(key), kids = it.kids && live;
+      let h = `<div class="val${kids ? ' can' : ''}" ${kids ? `data-val="${CG.esc(key)}"` : ''} title="${CG.esc(it.t || '')}">` +
+        `<span class="chev">${kids ? (open ? '▾' : '▸') : ''}</span><span class="vn">${CG.esc(it.n)}</span><span class="vv">${CG.esc(it.v)}</span><span class="vt">${CG.esc(it.t || '')}</span></div>`;
+      if (open) {
+        const got = d.children.get(key);
+        h += '<div class="val-kids">' + (!got ? '<div class="hint">Reading…</div>' : got.error ? `<div class="hint">${CG.esc(got.error)}</div>` : rows(got.items, scope, p)) + '</div>';
+      }
+      return h;
+    }).join('');
+    let h = '';
+    if (frame.args && frame.args.length) h += `<div class="heading">Goes in${live ? ' (now)' : ' (at the last pause)'}</div><div class="vals">${rows(frame.args, 'args', [])}</div>`;
+    const locals = (frame.locals || []).filter((l) => !(frame.args || []).some((a) => a.n === l.n));
+    if (locals.length) h += `<div class="heading">Local values${live ? '' : ' (at the last pause)'}</div><div class="vals">${rows(locals, 'locals', [])}</div>`;
+    return h;
+  }
+
+  function toggleValue(key) {
+    const d = app.debug;
+    if (!d || d.state !== 'break') return;
+    if (d.open.has(key)) d.open.delete(key);
+    else {
+      d.open.add(key);
+      if (!d.children.has(key)) {
+        const [frame, scope, ...rest] = key.split('|');
+        const path = rest.join('|').split('\u001f');
+        if (host) send({ type: 'debug-expand', id: d.id, frame: +frame, scope, path, key });
+        else setTimeout(() => onHost({ type: 'debug-children', key, items: CG.sampleChildren(path) }), 60);
+      }
+    }
+    renderDetails();
+  }
+
+  /** The paused call stack, innermost first; frames in the solution can be clicked. */
+  function callStackHtml() {
+    const d = app.debug;
+    if (!d) return '';
+    const live = app.trace && app.trace.live;
+    let h = `<div class="heading">Call stack${d.state === 'break' ? '' : ' at the last pause'}</div>`;
+    if (d.error) h += `<div class="hint">${CG.esc(d.error)}</div>`;
+    d.frames.slice(0, 20).forEach((f, i) => {
+      const here = i === d.frames.findIndex((x) => x.member);
+      const label = f.member ? f.member.label : f.fn;
+      h += `<div class="frame${f.member ? '' : ' outside'}${here ? ' here' : ''}" data-frame="${i}" title="${CG.esc(f.fn)}"><span class="name">${CG.esc(label)}</span>` +
+        `<span class="num">${f.file ? CG.esc(f.file.split('/').pop()) + ':' + (f.line + 1) : ''}</span></div>`;
+    });
+    if (live && !live.complete) h += '<div class="hint" style="margin-top:4px">The flow stops before the innermost frame (it was shown earlier in the flow or is too deep).</div>';
+    return h;
+  }
+
+  function frameClicked(i) {
+    const d = app.debug, f = d && d.frames[i];
+    if (!f) return;
+    const live = app.trace && app.trace.live;
+    if (live) for (const [step, fr] of live.frameOf) if (fr === f) return selectStep(step, 'details');
+    if (f.member) {
+      if (host) send({ type: 'goto', path: f.file, line: f.line });
+      else setStatus(`In Visual Studio this opens ${CG.esc(f.file)} at line ${f.line + 1}.`);
+    }
+  }
+
   // ── export ──
-  const VIEW_NAMES = { map: 'Map', tree: 'Tree', classes: 'Classes', calls: 'Calls', flow: 'Flow' };
+  const VIEW_NAMES = { map: 'Map', tree: 'Tree', classes: 'Classes', calls: 'Calls', flow: 'Flow', structure: 'Structure' };
 
   function exportName() {
     let what = '';
     if (app.view === 'flow' && app.flowEntry) what = app.flowEntry.ui || app.flowEntry.label;
+    else if (app.view === 'structure') what = app.structMode === 'projects' ? 'Projects' : 'Namespaces';
+    else if (app.view === 'calls' && app.uses) what = `Uses of ${app.uses.target.label || app.uses.target.n}`;
     else if (app.view === 'calls') what = app.impact ? `Impact of ${app.impact.target.label || app.impact.target.n}` : app.callFocus ? app.callFocus.label : '';
     else if (app.view === 'classes' && app.scope) what = app.scope.ns ? app.scope.ns.name : app.scope.type ? app.scope.type.n : app.scope.path;
     else if (app.model) what = app.focus ? app.focus.name : app.model.root.name;
@@ -519,6 +708,7 @@
     switch (app.view) {
       case 'classes': views.classes.layout(ctx); return CG.mermaid.classes(views.classes);
       case 'calls': views.calls.layout(ctx); return CG.mermaid.calls(views.calls, app.callFocus);
+      case 'structure': views.structure.layout(ctx); return app.structure ? CG.mermaid.structure(app.structure) : null;
       case 'flow': return app.flow && app.flow.state === 'ready' ? (app.flowStyle === 'steps' ? CG.mermaid.steps(app.flow.data) : CG.mermaid.sequence(app.flow.data)) : null;
       default: return app.model ? CG.mermaid.tree(app.model, views.tree.open) : null;
     }
@@ -616,6 +806,7 @@
   function focusCalls(x) {
     if (!x || !CG.isMethod(x)) return;
     app.impact = null;
+    app.uses = null;
     app.callFocus = x;
     app.csel = x;
     if (app.view !== 'calls') switchView('calls');
@@ -672,7 +863,8 @@
   function hasCrumbs() {
     if (app.view === 'map') return true;
     if (app.view === 'classes') return !!(app.code && app.scope);
-    if (app.view === 'calls') return !!(app.code && (app.callFocus || app.impact));
+    if (app.view === 'calls') return !!(app.code && (app.callFocus || app.impact || app.uses));
+    if (app.view === 'structure') return !!app.code;
     if (app.view === 'flow') return !!(app.code && app.flowEntry);
     return false;
   }
@@ -691,6 +883,12 @@
         add(ns.name, () => { setScope(scopeNs(ns)); selectCode(ns, 'crumb'); });
         add(`${s.type.n} and its relations`, () => selectCode(s.type, 'crumb'));
       }
+    } else if (app.view === 'calls' && app.code && app.uses) {
+      add('Back to calls', () => stopUses());
+      add(`Where ${app.uses.target.label || app.uses.target.n} is used`, () => selectCode(app.uses.target, 'crumb'));
+    } else if (app.view === 'structure' && app.code) {
+      add(app.structMode === 'projects' ? 'Projects' : 'Namespaces', () => { app.ssel = null; renderAll(); });
+      if (app.ssel) add(app.ssel.se ? `${app.ssel.from.label} → ${app.ssel.to.label}` : app.ssel.label, () => {});
     } else if (app.view === 'calls' && app.code && app.impact) {
       add('Back to calls', () => stopImpact());
       add(`Impact of ${app.impact.target.label || app.impact.target.n}`, () => selectCode(app.impact.target, 'crumb'));
@@ -712,10 +910,11 @@
 
   // ── left panel: Files, or Types and Methods ──
   function renderList(scroll) {
-    const title = app.view === 'classes' ? 'Types' : app.view === 'calls' ? 'Methods' : app.view === 'flow' ? 'Start from' : 'Files';
+    const title = app.view === 'classes' ? 'Types' : app.view === 'calls' ? 'Methods' : app.view === 'flow' ? 'Start from' : app.view === 'structure' ? (app.structMode === 'projects' ? 'Projects' : 'Namespaces') : 'Files';
     $('files-title').textContent = title;
     $('toggle-files').textContent = title;
-    if (isCode()) renderCodeList();
+    if (app.view === 'structure') renderStructureList();
+    else if (isCode()) renderCodeList();
     else renderFileList();
     if (scroll) {
       const sel = $('list').querySelector('.row.sel');
@@ -810,6 +1009,26 @@
     list.innerHTML = out.join('');
   }
 
+  function renderStructureList() {
+    const list = $('list');
+    if (app.code) views.structure.layout(ctx);
+    const st = app.structure;
+    if (!st) { list.innerHTML = ''; $('files-sub').textContent = ''; return; }
+    const nodes = st.nodes.slice().sort((p, q) => p.label.localeCompare(q.label));
+    list.innerHTML = nodes.map((n) => `<div class="row${n === app.ssel ? ' sel' : ''}" data-snode="${st.nodes.indexOf(n)}" title="${CG.esc(n.label)}"><span class="chev"></span>` +
+      `<span class="dot" style="border:1.6px solid ${n.cycle ? 'var(--danger)' : 'var(--text-secondary)'}"></span><span class="name">${CG.esc(n.label)}</span><span class="num">${n.types.length}</span></div>`).join('');
+    $('files-sub').textContent = CG.plural(st.nodes.length, st.mode === 'projects' ? 'project' : 'namespace');
+  }
+
+  function selectStructure(x, from) {
+    app.ssel = x;
+    if (x && from !== 'canvas') views.structure.reveal(ctx, x);
+    renderCrumbs();
+    renderList(from !== 'list');
+    renderDetails();
+    layout();
+  }
+
   /** The type, member or namespace a row or details entry stands for. */
   function codeOf(el) {
     const k = el.dataset.k, id = +el.dataset.id;
@@ -817,6 +1036,8 @@
   }
 
   $('list').addEventListener('click', (e) => {
+    const sn = e.target.closest('[data-snode]');
+    if (sn && app.structure) return selectStructure(app.structure.nodes[+sn.dataset.snode], 'list');
     const r = e.target.closest('.row[data-id]');
     if (!r) return;
     const onChev = e.target.classList.contains('chev');
@@ -1016,12 +1237,15 @@
             `${ex.uncaught.length ? `<span class="hint" style="color:var(--danger)">${ex.uncaught.length} not caught</span>` : '<span class="hint">all caught</span>'}<button class="chip" data-act="exceptions">Show</button></div>`;
         }
       }
+      if (app.debug) h += callStackHtml();
       if (!tr) h += '<div class="heading">Reading the flow</div><div class="hint">Calls are numbered in the order they run; each shows what goes in and, after the arrow, where its result goes. Double-click a call to open or close it. Follow a value to see every step it passes through.</div>';
     } else if (s.k === 'call') {
       const m = s.member, scope = CG.enclosing(s);
       title.innerHTML = `<span class="title">${s.no}. ${CG.esc(CG.flowLabel(s))}</span>`;
       h += `<div class="path">${CG.esc(m ? m.type.full : 'outside the solution')}</div>`;
       if (m) h += `<div class="sig">${CG.esc(`${s.aw ? 'await ' : ''}${m.a}${m.st ? ' static' : ''} ${m.n}${m.s}`)}</div>`;
+      const liveFrame = tr && tr.live && (tr.live.frameOf.get(s) || (s === tr.live.here ? tr.live.frameOf.get(tr.live.scope) : null));
+      if (liveFrame) h += `<div class="note" style="color:var(--accent-text)">${s === tr.live.here ? 'The program is paused here.' : 'Running: the program is paused inside this call.'}</div>`;
       h += `<div class="stats"><span class="k">Called at</span><span class="v">${CG.esc(s.f.split('/').pop())}:${s.l + 1}</span>`;
       if (s.b && s.b.length) h += `<span class="k">Can run</span><span class="v">${CG.plural(s.b.length, 'implementation')}</span>`;
       h += '</div>';
@@ -1032,6 +1256,7 @@
       if (CG.canOpen(s)) buttons.push(`<button class="btn" data-act="toggle">${s.open ? 'Close' : 'Open'}</button>`);
       if (m && CG.isMethod(m) && s.parent) buttons.push('<button class="btn" data-act="start-here">Start here</button>');
       h += `<div class="btn-row">${buttons.join('')}</div>`;
+      if (liveFrame) h += valuesHtml(liveFrame);
 
       // what goes in: the object it runs on, each argument, and the parameter it becomes inside the method
       if ((s.a && s.a.length) || s.on) h += '<div class="heading">Goes in</div>';
@@ -1062,6 +1287,8 @@
       title.innerHTML = `<span class="title">${names[s.k]}</span>`;
       h += `<div class="sig">${CG.esc(CG.flowLabel(s))}</div>`;
       h += `<div class="stats"><span class="k">Line</span><span class="v">${CG.esc(s.f.split('/').pop())}:${s.l + 1}</span></div>`;
+      const pausedAt = tr && tr.live && s === tr.live.here ? tr.live.frameOf.get(tr.live.scope) : null;
+      if (pausedAt) h += '<div class="note" style="color:var(--accent-text)">The program is paused here.</div>' + valuesHtml(pausedAt);
       if (s.b) h += '<div class="heading">Ways it can go</div>' + s.b.map((b) => `<div class="top"><span class="name">${CG.esc(b.c)}</span><span class="num">${b.s.length ? CG.plural(b.s.length, 'step') : 'nothing'}</span></div>`).join('');
       h += '<div class="btn-row"><button class="btn" data-act="goto-step">Go to code</button></div>';
     }
@@ -1113,7 +1340,72 @@
     body.innerHTML = h;
   }
 
+  function renderStructureDetails() {
+    const title = $('d-title'), body = $('d-body'), st = app.structure, x = app.ssel;
+    if (!st) { title.textContent = 'Details'; body.innerHTML = ''; return; }
+    const projects = st.mode === 'projects', idx = (n) => st.nodes.indexOf(n);
+    const nodeRow = (n, num) => `<div class="top" data-snode="${idx(n)}"><span class="dot" style="border:1.6px solid ${n.cycle ? 'var(--danger)' : 'var(--text-secondary)'}"></span><span class="name">${CG.esc(n.label)}</span><span class="num">${num}</span></div>`;
+    let h = '';
+    if (!x) {
+      title.innerHTML = `<span class="title">${projects ? 'Projects' : 'Namespaces'}</span>`;
+      h += `<div class="stats"><span class="k">${projects ? 'Projects' : 'Namespaces'}</span><span class="v">${st.nodes.length}</span><span class="k">Dependencies</span><span class="v">${st.edges.length}</span>` +
+        (projects ? `<span class="k">Unused references</span><span class="v">${st.unused.length}</span>` : '') + `<span class="k">Cycles</span><span class="v">${st.cycles.length}</span></div>`;
+      if (st.cycles.length) {
+        h += '<div class="heading">Dependency cycles</div>';
+        st.cycles.forEach((c) => { h += `<div class="note" style="color:var(--danger)">${CG.esc(c.map((n) => n.label).join(' ⇄ '))}</div>`; });
+        h += `<div class="hint">In a cycle each part needs the others, so none of them can change, build or be tested alone.</div>`;
+      }
+      if (st.unused.length) {
+        h += '<div class="heading">References nothing uses</div>';
+        for (const e of st.unused) h += `<div class="top" data-sedge="u${st.unused.indexOf(e)}"><span class="name">${CG.esc(e.from.label)} → ${CG.esc(e.to.label)}</span></div>`;
+      }
+      h += '<div class="hint" style="margin-top:8px">Arrows point from a part to what it uses, counted from calls, reads and writes, inheritance, fields and names in the code. What depends on nothing sits at the bottom.</div>';
+    } else if (!x.se) {
+      title.innerHTML = `<span class="title">${CG.esc(x.label)}</span>`;
+      h += `<div class="path">${projects ? 'Project' : 'Namespace'}</div><div class="stats"><span class="k">Types</span><span class="v">${x.types.length}</span><span class="k">Methods</span><span class="v">${x.methods}</span>` +
+        `<span class="k">Uses</span><span class="v">${x.out.size}</span><span class="k">Used by</span><span class="v">${x.in.size}</span></div>`;
+      if (x.cycle) h += `<div class="note" style="color:var(--danger)">In a dependency cycle with ${CG.esc(x.cycle.filter((n) => n !== x).map((n) => n.label).join(', '))}.</div>`;
+      const unusedHere = st.unused.filter((e) => e.from === x);
+      if (unusedHere.length) h += `<div class="note">References ${CG.esc(unusedHere.map((e) => e.to.label).join(', '))} but never uses ${unusedHere.length === 1 ? 'it' : 'them'}.</div>`;
+      h += `<div class="btn-row">${projects ? '<button class="btn" data-act="s-namespaces">Show its namespaces</button>' : '<button class="btn" data-act="s-classes">Show classes</button>'}</div>`;
+      const byWeight = (m) => [...m].sort((p, q) => q[1].weight - p[1].weight);
+      if (x.out.size) h += '<div class="heading">Uses</div>' + byWeight(x.out).map(([n, e]) => nodeRow(n, CG.plural(e.weight, 'use'))).join('');
+      if (x.in.size) h += '<div class="heading">Used by</div>' + byWeight(x.in).map(([n, e]) => nodeRow(n, CG.plural(e.weight, 'use'))).join('');
+      h += rows('Types', x.types.slice().sort((p, q) => p.n.localeCompare(q.n)), (t) => t.k, 30);
+    } else {
+      title.innerHTML = `<span class="title">${CG.esc(x.from.label)} → ${CG.esc(x.to.label)}</span>`;
+      if (x.unused) h += '<div class="note">Referenced in the project file, but no code uses it. The reference can probably be removed.</div>';
+      else {
+        h += `<div class="stats"><span class="k">Uses</span><span class="v">${x.weight}</span></div>`;
+        if (x.cycle) h += `<div class="note" style="color:var(--danger)">Part of a dependency cycle: ${CG.esc(x.to.label)} also needs ${CG.esc(x.from.label)}.</div>`;
+        h += '<div class="heading">What uses it</div>';
+        x.why.forEach((w, i) => {
+          const a = w.from.ck === 'type' ? w.from.n : w.from.label, b = w.to.ck === 'type' ? w.to.n : w.to.label;
+          h += `<div class="top" data-why="${i}" title="Double-click to open"><span class="name">${CG.esc(a)} <span class="hint">${w.how}</span> ${CG.esc(b)}</span></div>`;
+        });
+        if (x.weight > x.why.length) h += `<div class="hint">${x.weight - x.why.length} more</div>`;
+      }
+    }
+    body.innerHTML = h;
+  }
+
+  function renderUsesDetails() {
+    const title = $('d-title'), body = $('d-body'), u = app.uses, x = u.target;
+    title.innerHTML = `<span class="title">Where ${CG.esc(x.ck === 'type' ? x.n : x.label)} is used</span>`;
+    let h = `<div class="path">${CG.esc(x.ck === 'type' ? x.full : x.type.full)}</div>`;
+    h += `<div class="stats"><span class="k">${u.leftTitle}</span><span class="v">${u.left.length}</span><span class="k">${u.rightTitle}</span><span class="v">${u.right.length}</span></div>`;
+    h += '<div class="btn-row"><button class="btn" data-act="back-calls">Back to calls</button><button class="btn" data-act="goto">Go to code</button></div>';
+    const n = (side) => (m) => { const c = u.count(m, side); return c > 1 ? `×${c}` : ''; };
+    h += rows(u.leftTitle, u.left.slice().sort((p, q) => p.label.localeCompare(q.label)), n(-1), 40, true);
+    h += rows(u.rightTitle, u.right.slice().sort((p, q) => p.label.localeCompare(q.label)), n(1), 40, true);
+    if (!u.left.length && !u.right.length) h += '<div class="hint" style="margin-top:8px">Nothing in the C# uses this. XAML bindings or reflection may still.</div>';
+    if (u.kind === 'data') h += '<div class="hint" style="margin-top:8px">Writes are assignments, ++ and --, and out or ref arguments; everything else is a read.</div>';
+    body.innerHTML = h;
+  }
+
   function renderCodeDetails() {
+    if (app.view === 'structure') return renderStructureDetails();
+    if (app.view === 'calls' && app.uses && !app.csel) return renderUsesDetails();
     if (app.view === 'flow') return renderFlowDetails();
     if (app.view === 'calls' && app.impact && !app.csel) return renderImpactDetails();
     const title = $('d-title'), body = $('d-body'), c = app.code;
@@ -1141,6 +1433,7 @@
       if (app.view !== 'classes' || !(app.scope && app.scope.type === x)) buttons.push('<button class="btn" data-act="relations">Relations</button>');
       if (x.m.some(CG.isMethod)) buttons.push('<button class="btn" data-act="calls">Call graph</button>');
       buttons.push('<button class="btn" data-act="impact">Impact</button>');
+      buttons.push('<button class="btn" data-act="uses">Where used</button>');
       if (x.unused) h += '<div class="note">No use found: nothing in the C# names, creates or calls this type.</div>';
       h += `<div class="btn-row">${buttons.join('')}</div>`;
       h += rows('Inherits from', base ? [base] : [], () => '');
@@ -1159,10 +1452,15 @@
       if (x.cx) h += `<span class="k">Complexity</span><span class="v"><span class="cx" style="background:${CG.cxColor(x.cx)}">${x.cx}</span></span><span class="k">Lines</span><span class="v">${CG.lines(x)}</span><span class="k">Deepest nesting</span><span class="v">${x.nd || 0}</span>`;
       h += '</div>';
       if (x.unused) h += '<div class="note">No use found: nothing in the C# calls or reads this.</div>';
+      if (app.debug) {
+        const frame = app.debug.frames.find((f) => f.member === x);
+        if (frame) h += `<div class="note" style="color:var(--accent-text)">${app.debug.state === 'break' ? 'On the paused call stack.' : 'Was on the call stack at the last pause.'}</div>` + valuesHtml(frame);
+      }
       if (x.cx > 10) h += `<div class="hint" style="margin-top:6px">${x.cx} paths run through this ${KIND_NAMES[x.k].toLowerCase()}. Splitting it into smaller methods makes it easier to test and change.</div>`;
       const buttons = ['<button class="btn" data-act="goto">Go to code</button>'];
       if (CG.isMethod(x) && !(app.view === 'calls' && app.callFocus === x && !app.impact)) buttons.push('<button class="btn" data-act="calls">Call graph</button>');
       buttons.push('<button class="btn" data-act="impact">Impact</button>');
+      buttons.push('<button class="btn" data-act="uses">Where used</button>');
       h += `<div class="btn-row">${buttons.join('')}</div>`;
       const sites = (map) => (m) => (map.get(m) > 1 ? `×${map.get(m)}` : '');
       h += rows('Called by', [...x.in.keys()].sort((p, q) => p.label.localeCompare(q.label)), sites(x.in), 20, true);
@@ -1194,6 +1492,21 @@
     const act = e.target.closest('[data-act]');
     if (act) {
       const a = act.dataset.act;
+      if (app.view === 'structure') {
+        const x = app.ssel;
+        if (a === 's-namespaces') {
+          app.structMode = settings.structMode = 'namespaces';
+          save();
+          document.querySelectorAll('#structmode button').forEach((b) => b.classList.toggle('on', b.dataset.v === 'namespaces'));
+          app.ssel = null;
+          renderAll();
+        }
+        if (a === 's-classes' && x) {
+          const ns = app.code.namespaces.find((n) => n.name === x.label);
+          if (ns) { setScope(scopeNs(ns)); switchView('classes'); selectCode(ns, 'details'); }
+        }
+        return;
+      }
       if (app.view === 'flow') {
         const s = app.fsel;
         if (a === 'stop-trace') stopTrace();
@@ -1212,6 +1525,8 @@
         if (a === 'ns') { setScope(scopeNs(x)); selectCode(x, 'details'); }
         if (a === 'calls') focusCalls(x.ck === 'type' ? CG.busiest(x.m) : x);
         if (a === 'impact') startImpact(x);
+        if (a === 'uses') startUses(x);
+        if (a === 'back-calls' && app.uses) return stopUses();
         if (a === 'back-calls') stopImpact();
         if (a === 'flow-from') {
           const entry = app.code.byId.get(+act.dataset.id);
@@ -1232,6 +1547,14 @@
       }
       return;
     }
+    const val = e.target.closest('[data-val]');
+    if (val) return toggleValue(val.dataset.val);
+    const fr = e.target.closest('[data-frame]');
+    if (fr) return frameClicked(+fr.dataset.frame);
+    const sn = e.target.closest('[data-snode]');
+    if (sn && app.structure) return selectStructure(app.structure.nodes[+sn.dataset.snode], 'details');
+    const se = e.target.closest('[data-sedge]');
+    if (se && app.structure) return selectStructure(app.structure.unused[+se.dataset.sedge.slice(1)], 'details');
     const chip = e.target.closest('[data-follow]');
     if (chip && app.flow && app.flow.data) return startTrace(app.flow.data.byNo.get(+chip.dataset.scope), chip.dataset.follow);
     const traced = e.target.closest('[data-ti]');
@@ -1248,6 +1571,8 @@
     // a field or type in a result's shape opens its declaration
     const part = e.target.closest('.shape [data-k]');
     if (part && app.code) return goto(app.code.byId.get(+part.dataset.id));
+    const why = e.target.closest('[data-why]');
+    if (why && app.ssel && app.ssel.se) return goto(app.ssel.why[+why.dataset.why].from);
     const top = e.target.closest('.top[data-id]');
     if (!top) return;
     if (!top.dataset.k) return openFile(app.model.nodes[+top.dataset.id]);
@@ -1324,6 +1649,7 @@
     if (e.detail > 1 || !$('empty').hidden) return;
     const n = view().hit(e.clientX, e.clientY);
     if (app.view === 'flow') return selectStep(n, 'canvas');
+    if (app.view === 'structure') return selectStructure(n, 'canvas');
     if (isCode()) return app.code && selectCode(n, 'canvas');
     if (!app.model) return;
     if (app.view === 'tree' && n && n.kids) views.tree.toggle(n);
@@ -1335,6 +1661,18 @@
     if (!n) return;
     if (app.view === 'flow') {
       if (!toggleStep(n)) gotoStep(n);
+    } else if (app.view === 'structure') {
+      if (n.se) { if (n.why.length) goto(n.why[0].from); }
+      else if (app.structMode === 'namespaces') {
+        const ns = app.code.namespaces.find((x) => x.name === n.label);
+        if (ns) { setScope(scopeNs(ns)); switchView('classes'); selectCode(ns, 'canvas'); }
+      } else {
+        app.structMode = settings.structMode = 'namespaces';
+        save();
+        document.querySelectorAll('#structmode button').forEach((b) => b.classList.toggle('on', b.dataset.v === 'namespaces'));
+        app.ssel = null;
+        renderAll();
+      }
     } else if (app.view === 'classes') {
       if (n.ck === 'type') { setScope(scopeType(n)); selectCode(n, 'canvas'); }
       else goto(n);
@@ -1355,7 +1693,10 @@
   function showTip(n, x, y) {
     if (!n) return hideTip();
     let lines;
-    if (app.view === 'flow') {
+    if (app.view === 'structure') {
+      if (n.se) lines = [`${n.from.label} → ${n.to.label}`, n.unused ? 'referenced but never used' : CG.plural(n.weight, 'use'), n.cycle ? 'part of a dependency cycle' : 'double-click to open the first use'];
+      else lines = [n.label, CG.plural(n.types.length, 'type'), `uses ${n.out.size} · used by ${n.in.size}`];
+    } else if (app.view === 'flow') {
       if (n.k === 'call') lines = [`${n.no}. ${CG.flowLabel(n)}`, n.member ? n.member.s || KIND_NAMES[n.member.k] : 'outside the solution', `${n.f.split('/').pop()}:${n.l + 1}${CG.canOpen(n) ? ' · double-click to ' + (n.open ? 'close' : 'open') : ''}`];
       else lines = [CG.flowLabel(n), n.b ? n.b.map((b) => b.c).join(' · ') : n.k, `${n.f.split('/').pop()}:${n.l + 1}`];
     } else if (n.ck === 'type') lines = [n.n, `${n.mod ? n.mod + ' ' : ''}${n.k} in ${n.ns || 'the global namespace'}`, CG.plural(n.m.length, 'member')];
@@ -1421,6 +1762,13 @@
   document.addEventListener('pointerdown', (e) => {
     if (!exportPop.hidden && !exportPop.contains(e.target) && e.target !== $('export')) exportPop.hidden = true;
   });
+  segmented('structmode', app.structMode, (v) => {
+    app.structMode = settings.structMode = v;
+    save();
+    app.ssel = null;
+    renderAll();
+  });
+  $('live-pill').addEventListener('click', showPause);
   segmented('flowstyle', app.flowStyle, (v) => {
     app.flowStyle = settings.flowStyle = v;
     save();
@@ -1481,7 +1829,9 @@
     } else if (e.key === 'Escape') {
       if (!pop.hidden) pop.hidden = true;
       else if (!exportPop.hidden) exportPop.hidden = true;
+      else if (app.view === 'calls' && app.uses) stopUses();
       else if (app.view === 'calls' && app.impact) stopImpact();
+      else if (app.view === 'structure' && app.ssel) selectStructure(null, 'key');
       else if ($('search').value) { $('search').value = ''; search(); codeSearch(); renderList(); redraw(); }
       else if (app.view === 'flow' && app.trace) stopTrace();
       else if (app.view === 'flow' && app.fsel) selectStep(null, 'key');
@@ -1532,5 +1882,7 @@
     // a plain browser: show a made-up project so the page can be worked on without Visual Studio
     matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => { hostDark = e.matches; applyTheme(); });
     document.fonts.ready.then(() => onHost(demo()));
+    // for trying the debugger snapshot without Visual Studio: CG.demoHost(CG.sampleDebug(CG.app.code))
+    CG.demoHost = onHost;
   }
 })();

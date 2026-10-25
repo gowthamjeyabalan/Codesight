@@ -5,7 +5,7 @@
   </picture>
 </p>
 
-Codesight is a Visual Studio extension that shows you how your C# code works. Press a button in your app and see what runs, in order, through which classes. See how the classes fit together. Find the parts worth a look: complex methods, code nothing uses, exceptions nothing catches, and everything a change would reach.
+Codesight is a Visual Studio extension that shows you how your C# code works. Press a button in your app and see what runs, in order, through which classes. See how the classes fit together. Find the parts worth a look: complex methods, code nothing uses, exceptions nothing catches, and everything a change would reach. Pause in the debugger and see where you are on the diagram.
 
 It sits in a window beside your code, follows the Visual Studio theme, and takes you to the line behind anything you click.
 
@@ -49,6 +49,22 @@ One method in the middle, its callers on the left and what it calls on the right
 
 ![The Calls view](docs/calls.png)
 
+### While debugging
+
+Pause at a breakpoint and Codesight lights up the path the program took to get there: the **Paused in ...** button in the toolbar opens the flow from the button or other starting point that began it, with the calls on the stack marked *running* and the line you stopped on marked *paused here*. The details panel lists the call stack and the arguments and locals of each frame, which open up into their fields. Click a frame to go to its line. When the program runs on, the marks fade until it pauses again.
+
+![The Flow view while paused in the debugger](docs/debug.png)
+
+### Where is this used
+
+For a field, property, method or type, **Where used** shows every member that touches it, split by how: what writes a value and what reads it, what calls a method (also through the interfaces it implements), what creates or names a type and what holds one.
+
+### Structure: projects and namespaces
+
+How the projects of the solution, or its namespaces, depend on each other, with the most depended-on at the bottom. Arrows are counted from calls, reads and writes, inheritance and the types the code names; pick one to see why it is there. **Dependency cycles** are drawn in red, and a project reference that no code uses is drawn dashed.
+
+![The Structure view: a cycle between two projects and a reference nothing uses](docs/structure.png)
+
 ### Map and tree
 
 Every folder and file of the solution as a treemap or a tree, sized by lines, files or bytes, and coloured by language or by complexity. Updates by itself as files change.
@@ -65,7 +81,7 @@ Every folder and file of the solution as a treemap or a tree, sized by lines, fi
 
 ### Limits
 
-Codesight reads your code; it does not run it. A flow shows every path that *could* run, with types rather than live values. Events, dependency injection and reflection can hide where a call really goes, and "no use found" means nothing in the C# uses it (XAML bindings or reflection still might).
+Codesight reads your code; it does not run it. A flow shows every path that *could* run, with types rather than values; live values appear only while the debugger is paused. Events, dependency injection and reflection can hide where a call really goes, and "no use found" means nothing in the C# uses it (XAML bindings or reflection still might).
 
 ## Building
 
@@ -82,9 +98,9 @@ The web UI runs in a plain browser with made-up sample data, so it can be worked
 | Path | What |
 |---|---|
 | `src/Codegram/CodegramPackage.cs` | Package and the View menu command |
-| `src/Codegram/CodegramView.cs` | WebView2 host: solution events, theme, file watcher, the editor caret, open file, save and copy |
+| `src/Codegram/CodegramView.cs` | WebView2 host: solution events, theme, file watcher, the editor caret, the debugger, open file, save and copy |
 | `src/Codegram/FolderScanner.cs` | Walks the folder, counts lines, reads `.gitignore` |
-| `src/Codegram/CodeAnalyzer.cs` | Roslyn: types, members, inheritance, calls, uses, complexity, entry points |
+| `src/Codegram/CodeAnalyzer.cs` | Roslyn: types, members, inheritance, calls, reads and writes, project references, complexity, entry points |
 | `src/Codegram/FlowAnalyzer.cs` | Roslyn: the ordered flow from one method, with decisions, loops, data and exceptions |
 | `src/Codegram/web/` | The diagrams (plain HTML, CSS and JavaScript, no libraries) |
 | `brand/`, `tools/brand/` | The logo and its generator (see [brand/README.md](brand/README.md)) |

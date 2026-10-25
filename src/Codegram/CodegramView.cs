@@ -45,6 +45,11 @@ namespace Codegram
         /// <summary>Reports the editor's caret to the page, so the views can follow what is being read.</summary>
         readonly System.Windows.Threading.DispatcherTimer caretTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
         string lastCaret;
+        /// <summary>The debugger's events; kept in a field, or the COM wrapper is collected and the events stop.</summary>
+        EnvDTE.DebuggerEvents debuggerEvents;
+        /// <summary>Counts pauses, so a request to open a value from an older pause can be told apart.</summary>
+        int pauseId;
+        const int MaxFrames = 40, ValuedFrames = 12, MaxValues = 40;
         /// <summary>The folder being mapped, without a trailing separator; null when nothing is open.</summary>
         string root;
         CancellationTokenSource scan;
@@ -124,6 +129,7 @@ namespace Codegram
             {
                 case "ready":
                     pageReady = true;
+                    HookDebugger();
                     caretTimer.Tick -= OnCaretTick;
                     caretTimer.Tick += OnCaretTick;
                     caretTimer.Start();
@@ -145,6 +151,9 @@ namespace Codegram
                     break;
                 case "flow":
                     StartFlow((int?)message["id"] ?? -1);
+                    break;
+                case "debug-expand":
+                    ExpandValue((int?)message["id"] ?? -1, (int?)message["frame"] ?? -1, (string)message["scope"], message["path"]?.ToObject<string[]>(), (string)message["key"]);
                     break;
                 case "save":
                     Save((string)message["name"], (string)message["filter"], (string)message["text"], (string)message["base64"]);
@@ -232,12 +241,165 @@ namespace Codegram
                     calls = model.Calls,
                     refs = model.Refs,
                     typeRefs = model.TypeRefs,
+                    writes = model.Writes,
+                    projectRefs = model.ProjectRefs,
                     truncated = model.Truncated,
                     maxTypes = CodeAnalyzer.MaxTypes,
                     seconds = model.Seconds,
                     error,
                 });
             });
+        }
+
+        // ── debugger snapshot ──
+
+        void HookDebugger()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            if (debuggerEvents != null || !(Package.GetGlobalService(typeof(EnvDTE.DTE)) is EnvDTE.DTE dte))
+                return;
+            debuggerEvents = dte.Events.DebuggerEvents;
+            debuggerEvents.OnEnterBreakMode += OnBreak;
+            debuggerEvents.OnEnterRunMode += OnRun;
+            debuggerEvents.OnEnterDesignMode += OnDesign;
+            // opened while already paused: show that pause
+            if (dte.Debugger.CurrentMode == EnvDTE.dbgDebugMode.dbgBreakMode)
+                PostSnapshot("Breakpoint");
+        }
+
+        void OnBreak(EnvDTE.dbgEventReason reason, ref EnvDTE.dbgExecutionAction action)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            PostSnapshot(reason.ToString().Replace("dbgEventReason", ""));
+        }
+
+        void OnRun(EnvDTE.dbgEventReason reason)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            Post(new { type = "debug", state = "run" });
+        }
+
+        void OnDesign(EnvDTE.dbgEventReason reason)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            Post(new { type = "debug", state = "design" });
+        }
+
+        /// <summary>
+        /// The paused thread's call stack: each frame's method, file and line, and for frames in the solution their
+        /// arguments and locals one level deep (deeper levels are read when the page opens them).
+        /// </summary>
+        void PostSnapshot(string reason)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            if (disposed || !pageReady || !(Package.GetGlobalService(typeof(EnvDTE.DTE)) is EnvDTE.DTE dte))
+                return;
+            pauseId++;
+            try
+            {
+                var thread = dte.Debugger.CurrentThread;
+                if (thread == null)
+                    return;
+                var frames = new List<object>();
+                int index = 0, valued = 0;
+                foreach (EnvDTE.StackFrame frame in thread.StackFrames)
+                {
+                    if (index >= MaxFrames)
+                        break;
+                    string file = null;
+                    int line = -1;
+                    if (frame is EnvDTE90a.StackFrame2 located)
+                    {
+                        file = located.FileName;
+                        line = (int)located.LineNumber - 1;
+                    }
+                    bool mine = !string.IsNullOrEmpty(file) && root != null && File.Exists(file)
+                        && (file.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+                            || (workspace != null && workspace.CurrentSolution.GetDocumentIdsWithFilePath(file).Any()));
+                    bool values = mine && valued++ < ValuedFrames;
+                    frames.Add(new
+                    {
+                        index,
+                        fn = frame.FunctionName,
+                        file = mine ? CodeAnalyzer.Relative(root, file) : null,
+                        line,
+                        mine,
+                        args = values ? Values(frame.Arguments) : null,
+                        locals = values ? Values(frame.Locals) : null,
+                    });
+                    index++;
+                }
+                Post(new { type = "debug", state = "break", id = pauseId, reason, thread = thread.Name, frames });
+            }
+            catch (Exception ex) when (ex is System.Runtime.InteropServices.COMException || ex is InvalidOperationException)
+            {
+                Post(new { type = "debug", state = "break", id = pauseId, reason, error = "Could not read the call stack: " + ex.Message, frames = new object[0] });
+            }
+        }
+
+        /// <summary>Name, type and value of each expression, and whether it has members to open.</summary>
+        static List<object> Values(EnvDTE.Expressions expressions)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var list = new List<object>();
+            try
+            {
+                foreach (EnvDTE.Expression e in expressions)
+                {
+                    if (list.Count >= MaxValues)
+                        break;
+                    string value;
+                    bool kids;
+                    try
+                    {
+                        value = e.IsValidValue ? e.Value : "(not available)";
+                        kids = e.DataMembers != null && e.DataMembers.Count > 0;
+                    }
+                    catch (System.Runtime.InteropServices.COMException)
+                    {
+                        value = "(not available)";
+                        kids = false;
+                    }
+                    if (value != null && value.Length > 300)
+                        value = value.Substring(0, 299) + "…";
+                    list.Add(new { n = e.Name, t = e.Type, v = value, kids });
+                }
+            }
+            catch (System.Runtime.InteropServices.COMException) { }
+            return list;
+        }
+
+        /// <summary>The members of one value in a frame of the current pause, found by its path of names.</summary>
+        void ExpandValue(int id, int frameIndex, string scope, string[] path, string key)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            if (id != pauseId || path == null || !(Package.GetGlobalService(typeof(EnvDTE.DTE)) is EnvDTE.DTE dte) || dte.Debugger.CurrentMode != EnvDTE.dbgDebugMode.dbgBreakMode)
+            {
+                Post(new { type = "debug-children", key, error = "The program is no longer paused there." });
+                return;
+            }
+            try
+            {
+                var frame = dte.Debugger.CurrentThread.StackFrames.Item(frameIndex + 1);
+                var expressions = scope == "args" ? frame.Arguments : frame.Locals;
+                foreach (var name in path)
+                {
+                    EnvDTE.Expression found = null;
+                    foreach (EnvDTE.Expression e in expressions)
+                        if (e.Name == name) { found = e; break; }
+                    if (found == null)
+                    {
+                        Post(new { type = "debug-children", key, error = "That value is gone." });
+                        return;
+                    }
+                    expressions = found.DataMembers;
+                }
+                Post(new { type = "debug-children", key, items = Values(expressions) });
+            }
+            catch (Exception ex) when (ex is System.Runtime.InteropServices.COMException || ex is ArgumentException)
+            {
+                Post(new { type = "debug-children", key, error = ex.Message });
+            }
         }
 
         /// <summary>Asks where to save an exported diagram and writes it: text (SVG, Mermaid) or base64 (PNG).</summary>
@@ -466,6 +628,8 @@ namespace Codegram
 
         public void Dispose()
         {
+            // tool windows are disposed on the UI thread, where the debugger's COM events live
+            ThreadHelper.ThrowIfNotOnUIThread();
             if (disposed)
                 return;
             disposed = true;
@@ -475,6 +639,12 @@ namespace Codegram
             SolutionEvents.OnAfterOpenFolder -= OnFolderChanged;
             SolutionEvents.OnAfterCloseFolder -= OnFolderChanged;
             caretTimer.Stop();
+            if (debuggerEvents != null)
+            {
+                debuggerEvents.OnEnterBreakMode -= OnBreak;
+                debuggerEvents.OnEnterRunMode -= OnRun;
+                debuggerEvents.OnEnterDesignMode -= OnDesign;
+            }
             scan?.Cancel();
             analysis?.Cancel();
             flow?.Cancel();

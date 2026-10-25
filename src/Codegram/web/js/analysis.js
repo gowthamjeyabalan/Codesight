@@ -101,6 +101,45 @@ CG.exceptionMap = function (data) {
   return { throws, catches, uncaught: throws.filter((c) => !c.by) };
 };
 
+// ── where is this used ──
+/**
+ * Who uses `target`, in two groups drawn left and right of it: for a property, field or event, what writes it and
+ * what reads it; for a method, what calls it (also through an interface it implements) and what passes it on as a
+ * delegate; for a type, what creates or names it and which fields and properties hold one.
+ */
+CG.usesOf = function (code, target) {
+  const reads = (x, m) => (x.refIn.get(m) || 0) - (x.writeIn.get(m) || 0);
+  if (target.ck === 'member' && (target.k === 'prop' || target.k === 'field' || target.k === 'event')) {
+    return {
+      target, kind: 'data',
+      left: [...target.writeIn.keys()], right: [...target.refIn.keys()].filter((m) => reads(target, m) > 0),
+      leftTitle: 'Writes it', rightTitle: 'Reads it',
+      count: (m, side) => (side < 0 ? target.writeIn.get(m) : reads(target, m)),
+    };
+  }
+  if (target.ck === 'member') {
+    const callers = new Map(target.in);
+    for (const im of target.implements) for (const [c, n] of im.in) callers.set(c, (callers.get(c) || 0) + n);
+    return {
+      target, kind: 'method',
+      left: [...callers.keys()], right: [...target.refIn.keys()],
+      leftTitle: 'Calls it', rightTitle: 'Passes it on',
+      count: (m, side) => (side < 0 ? callers.get(m) : target.refIn.get(m)),
+    };
+  }
+  const makers = new Set(target.namedBy);
+  for (const x of target.m) if (x.k === 'ctor') for (const c of x.in.keys()) makers.add(c);
+  const plain = target.n.replace(/<.*/, '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const holds = new RegExp(`(^|[^\\w])${plain}([^\\w]|$)`);
+  return {
+    target, kind: 'type',
+    left: [...makers].filter((m) => m.type !== target),
+    right: code.members.filter((x) => (x.k === 'prop' || x.k === 'field') && x.type !== target && x.r && holds.test(x.r)),
+    leftTitle: 'Creates or names it', rightTitle: 'Holds one',
+    count: () => null,
+  };
+};
+
 // ── impact ──
 /**
  * What a change to `target` (a member, or every member of a type) can reach: everything that calls it, uses it,

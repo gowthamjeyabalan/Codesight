@@ -307,6 +307,21 @@ CG.mermaid.steps = function (data) {
   return lines.join('\n');
 };
 
+/** The project or namespace map as a top-down flowchart: uses, unused references (dotted) and cycles (red). */
+CG.mermaid.structure = function (st) {
+  const lines = ['flowchart TD'];
+  const id = new Map(st.nodes.map((n, i) => [n, `N${i}`]));
+  for (const n of st.nodes) lines.push(`  ${id.get(n)}["${mmText(n.label)}<br/>${CG.plural(n.types.length, 'type')}"]`);
+  for (const e of st.edges) lines.push(`  ${id.get(e.from)} -->|${e.weight}| ${id.get(e.to)}`);
+  for (const e of st.unused) lines.push(`  ${id.get(e.from)} -.->|unused| ${id.get(e.to)}`);
+  const cyc = st.nodes.filter((n) => n.cycle);
+  if (cyc.length) {
+    lines.push('  classDef cycle stroke:#ff6961,stroke-width:2px');
+    lines.push(`  class ${cyc.map((n) => id.get(n)).join(',')} cycle`);
+  }
+  return lines.join('\n').replace(/&lt;br\/&gt;/g, '<br/>');
+};
+
 /** The folder tree (as far as it is open on screen, at most a few hundred items). */
 CG.mermaid.tree = function (model, open) {
   const lines = ['flowchart LR'];
