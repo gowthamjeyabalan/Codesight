@@ -9,7 +9,7 @@
   const LIST_MAX = 300;
 
   // ── settings (per viewer, kept in the WebView profile) ──
-  const defaults = { theme: 'vs', material: 'acrylic', alpha: 0.8, view: 'map', metric: 'lines', colorBy: 'language', follow: true, members: 'all', depth: 2, flowStyle: 'sequence', structMode: 'projects', files: true, details: true };
+  const defaults = { theme: 'vs', material: 'acrylic', alpha: 0.8, view: 'map', metric: 'lines', colorBy: 'language', follow: true, members: 'all', depth: 2, flowStyle: 'sequence', structMode: 'projects', files: true, details: true, key: true };
   let settings = { ...defaults };
   try { Object.assign(settings, JSON.parse(localStorage.getItem('codesight.settings') || '{}')); } catch { /* private or blocked storage */ }
   // the demo page (no Visual Studio) can open on a view and style: index.html?view=flow&flowStyle=steps&theme=light
@@ -25,7 +25,7 @@
     code: null, codeVersion: 0, codeState: 'idle',
     csel: null, scope: null, callFocus: null, codeMatches: null,
     // flow: the starting member, its steps, the picked step
-    flowEntry: null, flow: null, fsel: null, flowVersion: 0, flowLoads: 0, flowStyle: settings.flowStyle, trace: null,
+    flowEntry: null, flow: null, fsel: null, flowVersion: 0, flowLoads: 0, flowStyle: settings.flowStyle, trace: null, showKey: settings.key !== false && settings.key !== 'false',
     // problems: file colours, and the reach of a change shown in the Calls view
     colorBy: settings.colorBy, impact: null,
     // where something is used (a mode of the Calls view), the structure map, and the debugger's last pause
@@ -1212,6 +1212,8 @@
     if (!s || s === (f && f.data && f.data.root)) {
       title.innerHTML = `<span class="title">${CG.esc(e.ui || e.label)}</span>`;
       h += `<div class="path">${CG.esc(e.ui ? e.label : e.type.full)}</div><div class="sig">${CG.esc(`${e.a} ${e.n}${e.s}`)}</div>`;
+      if (f && f.state === 'ready') h += `<div class="summary">${CG.esc(CG.flowSummary(f.data))}</div>`;
+      h += CG.docHtml(e);
       if (f && f.state === 'ready')
         h += `<div class="stats"><span class="k">Calls</span><span class="v">${f.data.calls}</span><span class="k">Classes</span><span class="v">${f.data.classes}</span></div>`;
       h += '<div class="btn-row"><button class="btn" data-act="goto-entry">Go to code</button><button class="btn" data-act="open-all">Open all</button><button class="btn" data-act="close-all">Close all</button></div>';
@@ -1244,6 +1246,7 @@
       title.innerHTML = `<span class="title">${s.no}. ${CG.esc(CG.flowLabel(s))}</span>`;
       h += `<div class="path">${CG.esc(m ? m.type.full : 'outside the solution')}</div>`;
       if (m) h += `<div class="sig">${CG.esc(`${s.aw ? 'await ' : ''}${m.a}${m.st ? ' static' : ''} ${m.n}${m.s}`)}</div>`;
+      h += CG.docHtml(m);
       const liveFrame = tr && tr.live && (tr.live.frameOf.get(s) || (s === tr.live.here ? tr.live.frameOf.get(tr.live.scope) : null));
       if (liveFrame) h += `<div class="note" style="color:var(--accent-text)">${s === tr.live.here ? 'The program is paused here.' : 'Running: the program is paused inside this call.'}</div>`;
       h += `<div class="stats"><span class="k">Called at</span><span class="v">${CG.esc(s.f.split('/').pop())}:${s.l + 1}</span>`;
@@ -1268,7 +1271,9 @@
         s.a.forEach((arg, i) => {
           const p = m && m.pn && m.pn[i];
           const name = CG.followable(arg);
+          const said = p && m.doc && m.doc.p && m.doc.p[p];
           h += `<div class="io"><span class="name" title="${CG.esc(arg)}">${CG.esc(arg)}</span>${p ? `<span class="hint">as ${CG.esc(p)}</span>` : ''}${name && scope ? follow(name, scope.no) : ''}</div>`;
+          if (said) h += `<div class="io-doc">${CG.esc(said)}</div>`;
         });
       }
       // what comes out: the type, where it is stored, what the method returns, and the type's shape
@@ -1697,7 +1702,7 @@
       if (n.se) lines = [`${n.from.label} → ${n.to.label}`, n.unused ? 'referenced but never used' : CG.plural(n.weight, 'use'), n.cycle ? 'part of a dependency cycle' : 'double-click to open the first use'];
       else lines = [n.label, CG.plural(n.types.length, 'type'), `uses ${n.out.size} · used by ${n.in.size}`];
     } else if (app.view === 'flow') {
-      if (n.k === 'call') lines = [`${n.no}. ${CG.flowLabel(n)}`, n.member ? n.member.s || KIND_NAMES[n.member.k] : 'outside the solution', `${n.f.split('/').pop()}:${n.l + 1}${CG.canOpen(n) ? ' · double-click to ' + (n.open ? 'close' : 'open') : ''}`];
+      if (n.k === 'call') lines = [`${n.no}. ${CG.flowLabel(n)}${n.a ? `(${n.a.join(', ')})` : ''}`, CG.docLine(n.member, 120) || (n.member ? n.member.s || KIND_NAMES[n.member.k] : 'outside the solution'), `${n.f.split('/').pop()}:${n.l + 1}${CG.canOpen(n) ? ' · double-click to ' + (n.open ? 'close' : 'open') : ''}`];
       else lines = [CG.flowLabel(n), n.b ? n.b.map((b) => b.c).join(' · ') : n.k, `${n.f.split('/').pop()}:${n.l + 1}`];
     } else if (n.ck === 'type') lines = [n.n, `${n.mod ? n.mod + ' ' : ''}${n.k} in ${n.ns || 'the global namespace'}`, CG.plural(n.m.length, 'member')];
     else if (n.ck === 'member') lines = [n.label, n.s || KIND_NAMES[n.k], CG.isMethod(n) ? `called by ${n.in.size} · calls ${n.out.size}` : KIND_NAMES[n.k]];
@@ -1818,6 +1823,13 @@
   alpha.addEventListener('change', save);
   $('set-follow').checked = settings.follow;
   $('set-follow').addEventListener('change', () => { settings.follow = $('set-follow').checked; save(); });
+  $('set-key').checked = app.showKey;
+  $('set-key').addEventListener('change', () => {
+    app.showKey = settings.key = $('set-key').checked;
+    save();
+    app.flowVersion++;
+    redraw();
+  });
 
   // ── keyboard ──
   document.addEventListener('keydown', (e) => {

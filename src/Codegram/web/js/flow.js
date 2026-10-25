@@ -197,7 +197,8 @@ class StepsLayout {
     const all = [...this.nodes, ...this.frames];
     const b = bounds(all);
     this.view.hits = this.nodes.map((n) => ({ s: n.s, x: n.x, y: n.y, w: n.w, h: n.h }));
-    return { bounds: { x0: b.x0 - 20, y0: b.y0 - 20, x1: b.x1 + 20, y1: b.y1 + 20 }, draw: (ctx, t) => this.draw(ctx, t) };
+    const e = (this.extras = new CG.FlowExtras(this.ctx, this.app, 'steps', data, b.x0, b.x1, b.y0, b.y1));
+    return { bounds: { x0: Math.min(b.x0, e.x) - 20, y0: e.top - 20, x1: Math.max(b.x1, e.x + e.width) + 20, y1: e.bottom + 20 }, draw: (ctx, t) => this.draw(ctx, t) };
   }
 
   list(steps) {
@@ -281,7 +282,7 @@ class StepsLayout {
         let w = 40 + this.width(String(s.no), '11px Inter') + this.width(p.type, '11.5px Inter') + this.width(p.name, '600 12px Inter');
         if (s.aw) w += this.width('await ', 'italic 11.5px Inter');
         if (s.x) w += this.width(STOP_TEXT[s.x], '11px Inter') + 14;
-        if (s.member) w += this.width(CG.argsText(s, 34), '11.5px Inter');
+        if (s.member) w += this.width(CG.shortArgs(s), '11.5px Inter');
         const out = CG.stepOut(s);
         if (out) w += this.width('  → ' + out, '11px Inter');
         if (CG.canOpen(s)) w += 14;
@@ -350,6 +351,7 @@ class StepsLayout {
 
   draw(ctx, t) {
     const a = this.app, sel = a.fsel, hov = a.hover;
+    this.extras.draw(ctx, t);
     for (const f of this.frames) {
       ctx.beginPath();
       ctx.roundRect(f.x, f.y, f.w, f.h, 10);
@@ -447,7 +449,7 @@ class StepsLayout {
         if (s.member && name === p.name) {
           ctx.font = '11.5px Inter';
           ctx.fillStyle = t.text2;
-          const args = CG.fit(ctx, CG.argsText(s, 34), end - x);
+          const args = CG.fit(ctx, CG.shortArgs(s), end - x);
           ctx.fillText(args, x, mid);
           x += ctx.measureText(args).width;
           const out = CG.stepOut(s);
@@ -547,9 +549,10 @@ class SequenceLayout {
     this.walk(root.s || [], main);
     this.leave(main);
     this.acts.push({ col: main, y0, y1: this.y, nest: 0 });
-    this.arrows.push({ from: main, to: start, y: this.y, ret: true });
+    const gives = CG.stepType(root);
+    this.arrows.push({ from: main, to: start, y: this.y, ret: true, label: gives ? `returns ${gives}` : 'done' });
     this.y += ROW;
-    return this.finish();
+    return this.finish(data);
   }
 
   enter(c) { this.nest.set(c, (this.nest.get(c) || 0) + 1); }
@@ -613,12 +616,14 @@ class SequenceLayout {
     const opened = !!(body && body.length);
     const out = CG.stepOut(s);
     // what goes in; when the call is not opened, where its result goes too
-    let label = `${s.no}. ${s.aw ? 'await ' : ''}${name}${m ? CG.argsText(s, 34) : ''}`;
+    let label = `${s.no}. ${s.aw ? 'await ' : ''}${name}${m ? CG.shortArgs(s) : ''}`;
     if (!opened && out) label += `  → ${out}`;
+    // what the author wrote about the method, in a smaller line under the call
+    const doc = CG.docLine(m, 70);
     const nestFrom = (this.nest.get(cur) || 1) - 1;
     const y0 = this.y;
-    this.arrows.push({ from: cur, to, y: y0, s, label, nestFrom, nestTo: this.nest.get(to) || 0, outside: !s.member && !member, stop: s.x });
-    this.y += ROW;
+    this.arrows.push({ from: cur, to, y: y0, s, label, doc, nestFrom, nestTo: this.nest.get(to) || 0, outside: !s.member && !member, stop: s.x });
+    this.y += ROW + (doc ? 12 : 0);
     if (opened) {
       const nest = this.nest.get(to) || 0;
       this.enter(to);
@@ -627,7 +632,7 @@ class SequenceLayout {
       this.acts.push({ col: to, y0, y1: this.y, nest });
       // a call within the same class returns along its own activation bar, not with a second arrow
       if (to !== cur) {
-        this.arrows.push({ from: to, to: cur, y: this.y, ret: true, s, label: out, nestFrom: nest, nestTo: nestFrom });
+        this.arrows.push({ from: to, to: cur, y: this.y, ret: true, s, label: out || 'done', nestFrom: nest, nestTo: nestFrom });
         this.y += ROW * 0.75;
       } else this.y += ROW * 0.3;
     } else {
@@ -635,7 +640,7 @@ class SequenceLayout {
     }
   }
 
-  finish() {
+  finish(data) {
     const ctx = this.ctx;
     ctx.font = '600 12px Inter';
     const widest = Math.max(...this.cols.map((c) => ctx.measureText(c.label).width));
@@ -657,12 +662,18 @@ class SequenceLayout {
     }
     this.view.hits = this.view.hits.filter((h) => h.w > 0);
     const b = { x0: -this.COL * 0.5, y0: -80, x1: X(this.cols.length - 1) + this.COL * 0.5, y1: this.y + 20 };
+    const e = (this.extras = new CG.FlowExtras(ctx, this.app, 'sequence', data, b.x0, b.x1, b.y0, this.y));
+    b.x0 = Math.min(b.x0, e.x);
+    b.x1 = Math.max(b.x1, e.x + e.width);
+    b.y0 = e.top - 10;
+    b.y1 = e.bottom + 20;
     return { bounds: b, draw: (c, t, cam) => this.draw(c, t, cam) };
   }
 
   draw(ctx, t) {
     const { ROW } = SequenceLayout;
     const X = this.X, a = this.app, sel = a.fsel, hov = a.hover, COL = this.COL, end = this.y;
+    this.extras.draw(ctx, t);
 
     // fragments: alt, opt, loop, try
     for (const f of this.frags) {
@@ -768,6 +779,7 @@ class SequenceLayout {
         ctx.stroke();
         CG.arrow(ctx, x + 7, ar.y + 14, Math.PI, 7, false);
         if (ar.label) this.label(ctx, t, ar, x + 40, ar.y + 4, 'left');
+        if (ar.doc) this.docText(ctx, t, ar, x + 40, ar.y + 19, 'left');
         if (traced) this.roleTag(ctx, t, role, x - 110, ar.y + 7, CG.toneOf(trace, ar.s, t));
         continue;
       }
@@ -782,6 +794,7 @@ class SequenceLayout {
       ctx.setLineDash([]);
       CG.arrow(ctx, x1, ar.y, dir > 0 ? 0 : Math.PI, 8, false);
       if (ar.label) this.label(ctx, t, ar, (x0 + x1) / 2, ar.y - 6, 'center');
+      if (ar.doc) this.docText(ctx, t, ar, (x0 + x1) / 2, ar.y + 15, 'center');
       if (traced && !ar.ret) this.roleTag(ctx, t, role, Math.max(x0, x1) + 14, ar.y, CG.toneOf(trace, ar.s, t));
     }
     ctx.globalAlpha = 1;
@@ -852,6 +865,14 @@ class SequenceLayout {
     ctx.fill();
     ctx.fillStyle = '#fff';
     ctx.fillText(role, x + 7, y + 4);
+  }
+
+  docText(ctx, t, ar, x, y, align) {
+    ctx.font = 'italic 11px Inter';
+    ctx.fillStyle = t.text2;
+    ctx.textAlign = align;
+    ctx.fillText(ar.doc, x, y);
+    ctx.textAlign = 'left';
   }
 
   label(ctx, t, ar, x, y, align) {

@@ -5,6 +5,8 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Text.RegularExpressions;
+using System.Xml.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -39,6 +41,16 @@ namespace Codegram
         [JsonProperty("xaml", DefaultValueHandling = DefaultValueHandling.Ignore)] public bool Xaml;
         /// <summary>Derives from a class outside the solution (Window, Controller...), which may create it by itself.</summary>
         [JsonProperty("fw", DefaultValueHandling = DefaultValueHandling.Ignore)] public bool Framework;
+        [JsonProperty("doc", NullValueHandling = NullValueHandling.Ignore)] public CodeDoc Doc;
+    }
+
+    /// <summary>What the author wrote about a type or member: its /// comment, or the // lines just above it.</summary>
+    sealed class CodeDoc
+    {
+        [JsonProperty("s", NullValueHandling = NullValueHandling.Ignore)] public string Summary;
+        /// <summary>Parameter name to what its &lt;param&gt; says.</summary>
+        [JsonProperty("p", NullValueHandling = NullValueHandling.Ignore)] public Dictionary<string, string> Params;
+        [JsonProperty("r", NullValueHandling = NullValueHandling.Ignore)] public string Returns;
     }
 
     sealed class CodeMember
@@ -73,6 +85,7 @@ namespace Codegram
         [JsonProperty("im", NullValueHandling = NullValueHandling.Ignore)] public List<int> Implements;
         /// <summary>Overrides or implements something, possibly outside the solution (Dispose, ToString), so it is called that way.</summary>
         [JsonProperty("ov", DefaultValueHandling = DefaultValueHandling.Ignore)] public bool Overrides;
+        [JsonProperty("doc", NullValueHandling = NullValueHandling.Ignore)] public CodeDoc Doc;
     }
 
     sealed class CodeModel
@@ -281,6 +294,7 @@ namespace Codegram
                 LineEnd = EndLine(symbol, loc),
                 Framework = symbol.TypeKind == TypeKind.Class && symbol.BaseType != null && symbol.BaseType.SpecialType != SpecialType.System_Object
                     && !symbol.BaseType.Locations.Any(l => l.IsInSource),
+                Doc = DocOf(symbol),
             };
             c.TypesByKey[key] = type;
             c.Model.Types.Add(type);
@@ -314,6 +328,7 @@ namespace Codegram
                     Returns = ValueType(member),
                     Parameters = member is IMethodSymbol withArgs && withArgs.Parameters.Length > 0 ? withArgs.Parameters.Select(p => p.Name).ToList() : null,
                     LineEnd = EndLine(member, mloc),
+                    Doc = DocOf(member),
                 };
                 var declaration = Declaration(member);
                 if (declaration != null && (member is IMethodSymbol || member is IPropertySymbol))
@@ -325,6 +340,110 @@ namespace Codegram
                 if (m.Entry == "event")
                     c.Handlers[symbol.ToDisplayString() + "." + member.Name] = m;
             }
+        }
+
+        /// <summary>The /// comment of a declaration (summary, params, returns), or else the // lines right above it.</summary>
+        static CodeDoc DocOf(ISymbol symbol)
+        {
+            foreach (var reference in symbol.DeclaringSyntaxReferences)
+            {
+                var node = reference.GetSyntax();
+                // a field's comment sits on the whole declaration, not on the variable
+                if (node is VariableDeclaratorSyntax && node.Parent?.Parent != null)
+                    node = node.Parent.Parent;
+                var trivia = node.GetLeadingTrivia();
+                var xml = trivia.Select(t => t.GetStructure()).OfType<DocumentationCommentTriviaSyntax>().FirstOrDefault();
+                var doc = xml != null ? FromXml(xml.ToFullString()) : FromLineComments(trivia);
+                if (doc != null)
+                    return doc;
+            }
+            return null;
+        }
+
+        static CodeDoc FromXml(string text)
+        {
+            XElement root;
+            try
+            {
+                root = XElement.Parse("<doc>" + Regex.Replace(text, @"^\s*///", "", RegexOptions.Multiline) + "</doc>");
+            }
+            catch (System.Xml.XmlException)
+            {
+                return null;
+            }
+            var doc = new CodeDoc
+            {
+                Summary = DocText(root.Element("summary")) ?? DocText(root.Element("remarks")),
+                Returns = DocText(root.Element("returns")) ?? DocText(root.Element("value")),
+            };
+            foreach (var p in root.Elements("param"))
+            {
+                var name = (string)p.Attribute("name");
+                var said = DocText(p);
+                if (name == null || said == null)
+                    continue;
+                doc.Params = doc.Params ?? new Dictionary<string, string>();
+                doc.Params[name] = said;
+            }
+            return doc.Summary == null && doc.Returns == null && doc.Params == null ? null : doc;
+        }
+
+        /// <summary>The words of a doc element on one line: &lt;see cref="T:A.B"/&gt; becomes B, &lt;paramref name="x"/&gt; becomes x.</summary>
+        static string DocText(XElement e)
+        {
+            if (e == null)
+                return null;
+            var parts = new List<string>();
+            void Walk(XNode n)
+            {
+                if (n is XText t)
+                    parts.Add(t.Value);
+                else if (n is XElement x)
+                {
+                    var named = (string)x.Attribute("cref") ?? (string)x.Attribute("name") ?? (string)x.Attribute("langword") ?? (string)x.Attribute("href");
+                    if (!x.Nodes().Any() && named != null)
+                        parts.Add(Regex.Replace(named, @"^\w:|\(.*$", "").Split('.').Last());
+                    else
+                        foreach (var c in x.Nodes())
+                            Walk(c);
+                }
+            }
+            foreach (var n in e.Nodes())
+                Walk(n);
+            var text = Regex.Replace(string.Join("", parts), @"\s+", " ").Trim();
+            if (text.Length == 0)
+                return null;
+            return text.Length > 400 ? text.Substring(0, 399) + "…" : text;
+        }
+
+        /// <summary>Plain // lines directly above a declaration, up to a blank line or code.</summary>
+        static CodeDoc FromLineComments(SyntaxTriviaList trivia)
+        {
+            var lines = new List<string>();
+            int breaks = 0;
+            for (int i = trivia.Count - 1; i >= 0; i--)
+            {
+                var t = trivia[i];
+                if (t.IsKind(SyntaxKind.WhitespaceTrivia))
+                    continue;
+                if (t.IsKind(SyntaxKind.EndOfLineTrivia))
+                {
+                    // a blank line ends the comment that belongs to this declaration
+                    if (++breaks > 1)
+                        break;
+                    continue;
+                }
+                if (!t.IsKind(SyntaxKind.SingleLineCommentTrivia))
+                    break;
+                breaks = 0;
+                lines.Add(t.ToString().Substring(2).Trim());
+            }
+            lines.Reverse();
+            var text = string.Join(" ", lines.Where(l => l.Length > 0 && !Regex.IsMatch(l, @"^(TODO|HACK|FIXME|NOTE:|-{3,}|={3,}|#region)", RegexOptions.IgnoreCase)));
+            text = Regex.Replace(text, @"\s+", " ").Trim();
+            if (text.Length == 0)
+                return null;
+            return new CodeDoc { Summary = text.Length > 400 ? text.Substring(0, 399) + "…" : text };
         }
 
         /// <summary>The base type, interfaces and field/property types that are themselves in the model.</summary>

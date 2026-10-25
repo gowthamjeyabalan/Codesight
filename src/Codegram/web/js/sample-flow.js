@@ -40,7 +40,7 @@ CG.sampleFlow = function (code, entry) {
         k: 'try', c: 'try', ...at(m, 1),
         b: [
           { c: 'try', s: [call(named(m, 'Place'), m, 2, { aw: true, on: '_service', a: ['_customer', 'CartItems()'], v: 'order' })] },
-          { c: 'catch InvalidOperationException', ct: 'InvalidOperationException', s: [call(named(m, 'ShowError'), m, 6)] },
+          { c: 'catch InvalidOperationException', ct: 'InvalidOperationException', s: [call(named(m, 'ShowError'), m, 6, { a: ['$"Could not place the order: {ex.Message}"'] })] },
         ],
       }];
     }

@@ -35,6 +35,8 @@ Pick a starting point: a button or other event (named after the control in your 
 
 Draw it as a **sequence** diagram (a column per class, calls going down the page) or as numbered **steps** (a flowchart). Double-click a call to open or close it.
 
+To make it easier to read, every flow starts with a one-line summary in plain English ("Clicking the “Browse...” button: if dlg.ShowDialog() is true, sets input file and logs the message"), and a key under the drawing explains its arrows, bars and boxes (Settings > Key under flows). Call labels are kept short: long strings keep their first words and long expressions show the parameter's name, with the whole call on hover. What you wrote about a method, in its `///` comment or the `//` lines just above it, appears under the call, and its parameters and return value are described in the details panel.
+
 ![The Flow view as a sequence diagram](docs/flow-sequence.png)
 
 ### Classes

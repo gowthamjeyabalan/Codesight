@@ -64,6 +64,18 @@ CG.sampleCode = function () {
   T('Contoso.Desktop', 'MainWindow', 'class', 'src/Contoso.Desktop/MainWindow.xaml.cs', 10, ['- field service: OrderService', '+ ctor ctor()', '- method PlaceOrderButton_Click(object sender, RoutedEventArgs e)', '- method CancelButton_Click(object sender, RoutedEventArgs e)', '- method ShowError(string message)']);
   Object.assign(members.get('MainWindow.PlaceOrderButton_Click'), { ep: 'event', ui: 'Button “Place order” · Click' });
   Object.assign(members.get('MainWindow.CancelButton_Click'), { ep: 'event', ui: 'Button “Cancel order” · Click' });
+  // what the made-up authors wrote: /// comments on some members, a plain // line on one, nothing on the rest
+  const doc = (n, d) => { members.get(n).doc = d; };
+  doc('OrderService.Place', { s: 'Creates an order for the customer, prices each product, saves the order and emails a confirmation.', p: { customer: 'Who is ordering.', products: 'What is in the cart; must not be empty.' }, r: 'The placed order, with its total.' });
+  doc('Order.AddLine', { s: 'Adds a product to the order and updates the total.', p: { product: 'What to add.', quantity: 'How many; must be more than zero.' } });
+  doc('IPricingService.Price', { s: 'Works out what the customer pays for one product, with tax and discounts.', r: 'The price of one unit.' });
+  doc('PricingService.Price', { s: 'Works out what the customer pays for one product, with tax and discounts.', r: 'The price of one unit.' });
+  doc('UnitOfWork.Commit', { s: 'Saves every change in one go and sends the queued events.' });
+  doc('IMailService.SendConfirmation', { s: 'Emails the customer that their order was placed.' });
+  doc('SmtpMailService.SendConfirmation', { s: 'Emails the customer that their order was placed.' });
+  doc('MainWindow.ShowError', { s: 'Shows the problem in a message box' });
+  doc('Guard.NotNull', { s: 'Throws when a value is missing.', p: { value: 'The value to check.', name: 'Its name, for the message.' } });
+  byName.get('OrderService').doc = { s: 'Places and cancels orders.' };
   for (const n of ['OrdersController.Get', 'OrdersController.Post', 'OrdersController.Delete', 'CustomersController.Get', 'CustomersController.Rename']) members.get(n).ep = 'action';
 
   const ref = (n) => byName.get(n).id;
